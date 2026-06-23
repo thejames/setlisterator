@@ -20,6 +20,7 @@ Copy `.env.example` to `.env` and fill it in:
 | `PLEX_BASEURL`       | yes      | e.g. `http://localhost:32400`                    |
 | `PLEX_TOKEN`         | yes      | your Plex `X-Plex-Token`                          |
 | `PLEX_MUSIC_LIBRARY` | no       | library section name (default `Music`)           |
+| `SETLIST_TO_PLEX_HISTORY` | no  | history file path (default below)                |
 
 ## Usage
 
@@ -37,6 +38,40 @@ Copy `.env.example` to `.env` and fill it in:
 The playlist name defaults to `{artist} - {venue}, {city} ({YYYY-MM-DD})`. If a
 playlist with that name already exists, a numeric suffix is appended rather than
 failing.
+
+### Flags
+
+| Flag           | Effect                                                       |
+| -------------- | ------------------------------------------------------------ |
+| `--name NAME`  | override the auto-generated playlist name                    |
+| `--quiet`      | suppress per-song match logging on stderr                    |
+| `--force`      | re-process a setlist even if it was processed before         |
+| `--no-history` | don't read or write the processed-setlist history            |
+
+## Logging vs. report
+
+The actionable **report** (playlist name, missing, fuzzy) goes to **stdout**.
+Per-song match decisions are logged to **stderr** (on by default; `--quiet` to
+silence), one line per song with the matched track, tier, and source:
+
+```
+Setlist: Primus — TD Amp Ballantyne, Charlotte (2026-06-16) — 12 songs
+Library: matching against 214 tracks by Primus
+  ✓  1. Tommy the Cat → 'Tommy the Cat'  [exact/scoped]
+  ✓  7. Hello Skinny → 'Hello Skinny / Constantinople'  [medley/scoped]
+  ✗  5. Jilly's on Smack → no match
+```
+
+## Processed-setlist history
+
+Each setlist that produces a playlist is recorded in a small JSON file (default
+`~/.config/setlist_to_plex/history.json`, honoring `XDG_CONFIG_HOME`; override
+with `SETLIST_TO_PLEX_HISTORY`). Keys are setlist IDs, so a bare ID and a full
+URL for the same show dedupe correctly. On a repeat run the tool prompts when
+interactive, or skips with a hint to pass `--force` when run non-interactively
+(cron, pipes) so it never hangs. Only runs that actually create a playlist are
+recorded — a show that matched nothing is retried next time. The history lives
+outside the repo, so it won't be committed.
 
 ## How matching works
 

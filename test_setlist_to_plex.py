@@ -256,35 +256,34 @@ def test_match_song_prefers_exact_artist_and_title():
         _FakeTrack("Wilson", "Ween"),       # title match, wrong artist
         _FakeTrack("Wilson", "Phish"),      # exact
     ])
-    track, quality = m.match_song(section, "Wilson", "Phish", [])
-    assert quality == "exact"
-    assert track.grandparentTitle == "Phish"
+    match = m.match_song(section, "Wilson", "Phish", [])
+    assert match.quality == "exact"
+    assert match.source == "global"
+    assert match.track.grandparentTitle == "Phish"
 
 
 def test_match_song_exact_ignores_parenthetical_punctuation():
     section = _FakeSection([_FakeTrack("Tweezer (Reprise)", "Phish")])
-    track, quality = m.match_song(section, "Tweezer Reprise", "Phish", [])
-    assert quality == "exact"
-    assert track is not None
+    match = m.match_song(section, "Tweezer Reprise", "Phish", [])
+    assert match.quality == "exact"
 
 
 def test_match_song_fuzzy_on_abbreviation():
     section = _FakeSection([_FakeTrack("Wilson, Pt. 2", "Phish")])
-    track, quality = m.match_song(section, "Wilson Part 2", "Phish", [])
-    assert quality == "fuzzy"
-    assert track is not None
+    match = m.match_song(section, "Wilson Part 2", "Phish", [])
+    assert match.quality == "fuzzy"
+    assert match.tier == "loose"
 
 
 def test_match_song_fuzzy_when_artist_differs():
     section = _FakeSection([_FakeTrack("Loving Cup", "The Rolling Stones")])
-    track, quality = m.match_song(section, "Loving Cup", "Phish", [])
-    assert quality == "fuzzy"
+    match = m.match_song(section, "Loving Cup", "Phish", [])
+    assert match.quality == "fuzzy"
 
 
 def test_match_song_returns_none_when_no_match():
     section = _FakeSection([_FakeTrack("Totally Different", "Nobody")])
-    track, quality = m.match_song(section, "Wilson", "Phish", [])
-    assert track is None and quality is None
+    assert m.match_song(section, "Wilson", "Phish", []) is None
 
 
 # --- artist-scoped path (Part A) -------------------------------------------
@@ -294,43 +293,44 @@ def test_scoped_match_survives_unicode_hyphen():
     # Plex search misses it, but local scoped matching normalizes both away.
     library = [_FakeTrack("Those Damned Blue‐Collar Tweekers", "Primus")]
     section = _FakeSection()  # global search returns nothing
-    track, quality = m.match_song(
+    match = m.match_song(
         section, "Those Damned Blue-Collar Tweekers", "Primus", library)
-    assert quality == "exact"
-    assert track is not None
+    assert match.quality == "exact"
+    assert match.source == "scoped"
 
 
 def test_scoped_match_handles_medley_segment():
     # Real bug #7: library track is a medley; setlist lists one song of it.
     library = [_FakeTrack("Hello Skinny / Constantinople", "Primus")]
     section = _FakeSection()
-    track, quality = m.match_song(section, "Hello Skinny", "Primus", library)
-    assert quality == "fuzzy"
-    assert track is not None
+    match = m.match_song(section, "Hello Skinny", "Primus", library)
+    assert match.quality == "fuzzy"
+    assert match.tier == "medley"
 
 
 def test_scoped_match_handles_trailing_words():
     library = [_FakeTrack("Tommy the Cat - Live in Charlotte", "Primus")]
     section = _FakeSection()
-    track, quality = m.match_song(section, "Tommy the Cat", "Primus", library)
-    assert quality == "fuzzy"
+    match = m.match_song(section, "Tommy the Cat", "Primus", library)
+    assert match.quality == "fuzzy"
+    assert match.tier == "prefix"
 
 
 def test_prefix_tier_requires_multiword_target():
     # A single-word target must not prefix-match an unrelated longer title.
     library = [_FakeTrack("Bobby Brown Stomp", "Primus")]
     section = _FakeSection()
-    track, quality = m.match_song(section, "Bob", "Primus", library)
-    assert track is None and quality is None
+    assert m.match_song(section, "Bob", "Primus", library) is None
 
 
 def test_scoped_exact_beats_global():
     # Scoped match wins even when a global search would also hit.
     library = [_FakeTrack("Tommy the Cat", "Primus", rating_key=1)]
     section = _FakeSection([_FakeTrack("Tommy the Cat", "Someone Else")])
-    track, quality = m.match_song(section, "Tommy the Cat", "Primus", library)
-    assert quality == "exact"
-    assert track.ratingKey == 1
+    match = m.match_song(section, "Tommy the Cat", "Primus", library)
+    assert match.quality == "exact"
+    assert match.source == "scoped"
+    assert match.track.ratingKey == 1
 
 
 # --- resolve_artist --------------------------------------------------------
@@ -352,3 +352,63 @@ def test_split_medley_variants():
     assert m._split_medley("A / B") == ["A", "B"]
     assert m._split_medley("A > B ; C") == ["A", "B", "C"]
     assert m._split_medley("Single Song") == ["Single Song"]
+
+
+# ---------------------------------------------------------------------------
+# Processed-setlist history
+# ---------------------------------------------------------------------------
+
+def test_history_path_honors_override(monkeypatch):
+    monkeypatch.setenv("SETLIST_TO_PLEX_HISTORY", "/tmp/custom-history.json")
+    assert m.history_path() == m.Path("/tmp/custom-history.json")
+
+
+def test_history_path_defaults_to_xdg(monkeypatch):
+    monkeypatch.delenv("SETLIST_TO_PLEX_HISTORY", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/xdg")
+    assert m.history_path() == m.Path("/tmp/xdg/setlist_to_plex/history.json")
+
+
+def test_load_history_missing_file_returns_empty(tmp_path):
+    assert m.load_history(tmp_path / "nope.json") == {}
+
+
+def test_load_history_corrupt_file_returns_empty(tmp_path):
+    bad = tmp_path / "history.json"
+    bad.write_text("{not json", encoding="utf-8")
+    assert m.load_history(bad) == {}
+
+
+def test_save_then_load_round_trip(tmp_path):
+    path = tmp_path / "nested" / "history.json"  # parent created on save
+    data = {"abc123": {"playlist_name": "Test", "matched": 5}}
+    m.save_history(path, data)
+    assert m.load_history(path) == data
+
+
+def test_should_process_new_id():
+    assert m.should_process({}, "abc", force=False, is_tty=False) is True
+
+
+def test_should_process_force_overrides_history():
+    history = {"abc": {"playlist_name": "X"}}
+    assert m.should_process(history, "abc", force=True, is_tty=False) is True
+
+
+def test_should_process_non_tty_skips_known_id():
+    history = {"abc": {"playlist_name": "X", "processed_at": "2026-06-22"}}
+    assert m.should_process(history, "abc", force=False, is_tty=False) is False
+
+
+def test_should_process_tty_prompts_yes():
+    history = {"abc": {"playlist_name": "X"}}
+    answered = m.should_process(history, "abc", force=False, is_tty=True,
+                                prompt_fn=lambda _: "y")
+    assert answered is True
+
+
+def test_should_process_tty_prompts_no():
+    history = {"abc": {"playlist_name": "X"}}
+    answered = m.should_process(history, "abc", force=False, is_tty=True,
+                                prompt_fn=lambda _: "")
+    assert answered is False

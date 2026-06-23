@@ -12,6 +12,14 @@ real environment):
     PLEX_BASEURL          Base URL of your Plex server, e.g. http://localhost:32400
     PLEX_TOKEN            Your Plex auth token (X-Plex-Token).
     PLEX_MUSIC_LIBRARY    Name of the music library section. Default: "Music".
+    SETLIST_TO_PLEX_HISTORY  Optional path to the processed-setlist history
+                          file. Default: ~/.config/setlist_to_plex/history.json
+                          (honoring XDG_CONFIG_HOME).
+
+Per-song match decisions are logged to stderr by default (use --quiet to
+silence); the actionable report is printed to stdout. Each processed setlist
+is recorded so a repeat run prompts (or, non-interactively, skips) unless
+--force is given; --no-history disables the history entirely.
 
 Example usage:
 
@@ -23,13 +31,20 @@ Example usage:
 
     # Override the auto-generated playlist name
     python setlist_to_plex.py 63de4613 --name "Phish @ MSG NYE"
+
+    # Re-process a setlist you've already done
+    python setlist_to_plex.py 63de4613 --force
 """
 
 import argparse
+import json
+import logging
 import os
 import re
 import sys
+from collections import namedtuple
 from datetime import datetime
+from pathlib import Path
 
 import requests
 
@@ -50,6 +65,8 @@ except ImportError:  # pragma: no cover - dependency guard
 
 
 SETLISTFM_API_BASE = "https://api.setlist.fm/rest/1.0/setlist/"
+
+logger = logging.getLogger("setlist_to_plex")
 
 # Exit codes
 EXIT_OK = 0
@@ -245,6 +262,13 @@ def _track_artist_name(track):
         getattr(track, "originalTitle", None) or ""
 
 
+# A resolved match for one setlist song. tier is one of TIER_NAMES; source is
+# 'scoped' (the artist's own tracks) or 'global' (fallback title search).
+Match = namedtuple("Match", "track quality tier source")
+
+# Human-readable names for the _title_rank tiers (index == rank).
+TIER_NAMES = ("exact", "loose", "medley", "prefix")
+
 # Separators that join songs in a single library track (medleys).
 _MEDLEY_SPLIT = re.compile(r"\s*(?:/|→|>|;)\s*")
 
@@ -286,7 +310,7 @@ def _title_rank(target_simple, target_aggr, cand_title):
 
 
 def _best_match(target_simple, target_aggr, tracks, setlist_artist, scoped):
-    """Return (overall_rank, track, quality) for the best track, or None.
+    """Return (overall_rank, track, quality, tier) for the best track, or None.
 
     When ``scoped`` is True the tracks are already known to be by the setlist
     artist, so artist matching is assumed; otherwise it is checked per track
@@ -302,7 +326,7 @@ def _best_match(target_simple, target_aggr, tracks, setlist_artist, scoped):
         overall = title_rank if artist_ok else title_rank + 4
         quality = "exact" if (artist_ok and title_rank == 0) else "fuzzy"
         if best is None or overall < best[0]:
-            best = (overall, track, quality)
+            best = (overall, track, quality, TIER_NAMES[title_rank])
         if overall == 0:
             break  # can't beat an exact artist+title hit
     return best
@@ -345,7 +369,7 @@ def match_song(section, title, setlist_artist, artist_tracks):
     Only if that finds nothing do we fall back to a global title search, which
     also covers songs performed as covers of other artists.
 
-    Returns (track, quality) where quality is 'exact', 'fuzzy', or None.
+    Returns a Match (track, quality, tier, source), or None for no match.
     """
     target_simple = normalize_simple(title)
     target_aggr = normalize_aggressive(title)
@@ -353,14 +377,16 @@ def match_song(section, title, setlist_artist, artist_tracks):
     scoped = _best_match(target_simple, target_aggr, artist_tracks,
                          setlist_artist, scoped=True)
     if scoped is not None:
-        return scoped[1], scoped[2]
+        _, track, quality, tier = scoped
+        return Match(track, quality, tier, "scoped")
 
     candidates = _search_candidates(section, title, target_aggr)
     best = _best_match(target_simple, target_aggr, candidates,
                        setlist_artist, scoped=False)
     if best is None:
-        return None, None
-    return best[1], best[2]
+        return None
+    _, track, quality, tier = best
+    return Match(track, quality, tier, "global")
 
 
 def unique_playlist_name(plex, name):
@@ -376,6 +402,62 @@ def unique_playlist_name(plex, name):
     while f"{name} ({suffix})" in existing:
         suffix += 1
     return f"{name} ({suffix})"
+
+
+# ---------------------------------------------------------------------------
+# Processed-setlist history (a small JSON store keyed by setlist ID)
+# ---------------------------------------------------------------------------
+
+def history_path():
+    """Path to the JSON history file (override with SETLIST_TO_PLEX_HISTORY)."""
+    override = os.environ.get("SETLIST_TO_PLEX_HISTORY")
+    if override:
+        return Path(override)
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return Path(base) / "setlist_to_plex" / "history.json"
+
+
+def load_history(path):
+    """Load the history dict; tolerate a missing or corrupt file."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except (ValueError, OSError) as exc:
+        logger.warning("Could not read history at %s (%s); starting fresh.",
+                       path, exc)
+        return {}
+
+
+def save_history(path, history):
+    """Write the history dict atomically (temp file + replace)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(history, fh, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def should_process(history, setlist_id, force, is_tty, prompt_fn=input):
+    """Decide whether to process a setlist given prior history.
+
+    New IDs and ``force`` always proceed. A previously-processed ID prompts
+    when interactive (TTY), and is skipped otherwise so automation never hangs.
+    """
+    if setlist_id not in history or force:
+        return True
+    entry = history[setlist_id]
+    when = entry.get("processed_at", "previously")
+    name = entry.get("playlist_name", "(unknown)")
+    notice = f"Setlist {setlist_id} was already processed {when} as '{name}'."
+    if is_tty:
+        print(notice, file=sys.stderr)
+        return prompt_fn("Re-process? [y/N] ").strip().lower() in ("y", "yes")
+    print(notice + " Use --force to re-process.", file=sys.stderr)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +502,20 @@ def main(argv=None):
         "setlist", help="setlist.fm setlist ID or full setlist URL")
     parser.add_argument(
         "--name", help="override the auto-generated playlist name")
+    parser.add_argument(
+        "--quiet", action="store_true",
+        help="suppress per-song match logging on stderr")
+    parser.add_argument(
+        "--force", action="store_true",
+        help="re-process even if this setlist was processed before")
+    parser.add_argument(
+        "--no-history", action="store_true",
+        help="do not read or write the processed-setlist history")
     args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.WARNING if args.quiet else logging.INFO,
+        format="%(message)s", stream=sys.stderr)
 
     load_dotenv()
     api_key = os.environ.get("SETLISTFM_API_KEY")
@@ -449,6 +544,14 @@ def main(argv=None):
         print(str(exc), file=sys.stderr)
         return EXIT_SETLIST
 
+    # Skip work if we've already built a playlist for this setlist (checked
+    # before the API call to save quota). --force / --no-history bypass this.
+    hist_file = history_path()
+    history = {} if args.no_history else load_history(hist_file)
+    if not args.no_history and not should_process(
+            history, setlist_id, args.force, sys.stdin.isatty()):
+        return EXIT_OK
+
     try:
         data = fetch_setlist(setlist_id, api_key)
     except (LookupError, PermissionError, ConnectionError, RuntimeError) as exc:
@@ -462,10 +565,10 @@ def main(argv=None):
         return EXIT_SETLIST
 
     playlist_name = args.name or build_playlist_name(show)
-    print(f"Setlist: {show['artist']} — {show['venue']}, {show['city']} "
-          f"({show['date']}) — {len(show['songs'])} songs")
+    logger.info("Setlist: %s — %s, %s (%s) — %d songs", show["artist"],
+                show["venue"], show["city"], show["date"], len(show["songs"]))
     if show["url"]:
-        print(f"Source:  {show['url']}")
+        logger.info("Source:  %s", show["url"])
 
     # --- Connect to Plex --------------------------------------------------
     try:
@@ -483,11 +586,11 @@ def main(argv=None):
             artist_tracks = artist.tracks()
         except Exception:
             artist_tracks = []
-        print(f"Library:  matching against {len(artist_tracks)} tracks by "
-              f"{artist.title}")
+        logger.info("Library: matching against %d tracks by %s",
+                    len(artist_tracks), artist.title)
     else:
-        print(f"Library:  '{show['artist']}' not found as an artist; "
-              "using global track search")
+        logger.info("Library: '%s' not found as an artist; "
+                    "using global track search", show["artist"])
 
     # --- Match each song --------------------------------------------------
     matched_tracks = []
@@ -495,11 +598,15 @@ def main(argv=None):
     fuzzy = []
     seen_keys = set()
     for position, title in enumerate(show["songs"], start=1):
-        track, quality = match_song(section, title, show["artist"], artist_tracks)
-        if track is None:
+        match = match_song(section, title, show["artist"], artist_tracks)
+        if match is None:
             missing.append((position, show["artist"], title))
+            logger.info("  ✗ %2d. %s → no match", position, title)
             continue
-        if quality == "fuzzy":
+        track = match.track
+        logger.info("  ✓ %2d. %s → %r  [%s/%s]", position, title,
+                    track.title, match.tier, match.source)
+        if match.quality == "fuzzy":
             got = f"{_track_artist_name(track)} - {track.title}"
             fuzzy.append((position, f"{show['artist']} - {title}", got))
         # Dedupe: a medley track can match more than one setlist song.
@@ -521,6 +628,23 @@ def main(argv=None):
     except plex_exceptions.PlexApiException as exc:
         print(f"Failed to create playlist: {exc}", file=sys.stderr)
         return EXIT_PLEX
+
+    # Record the run only now that a playlist actually exists.
+    if not args.no_history:
+        history[setlist_id] = {
+            "id": setlist_id,
+            "url": show["url"],
+            "artist": show["artist"],
+            "date": show["date"],
+            "playlist_name": final_name,
+            "processed_at": datetime.now().isoformat(timespec="seconds"),
+            "matched": len(matched_tracks),
+            "missing": len(missing),
+        }
+        try:
+            save_history(hist_file, history)
+        except OSError as exc:
+            logger.warning("Could not write history at %s (%s).", hist_file, exc)
 
     print_report(final_name, len(matched_tracks), missing, fuzzy)
     return EXIT_OK
