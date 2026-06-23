@@ -62,7 +62,8 @@ Library: matching against 214 tracks by Primus
   ✗  5. Jilly's on Smack → no match
 ```
 
-The web Preview also shows the source album as a column in the matched table.
+The web Preview shows the source album inline with each matched track (and in
+the per-song picker when there's more than one candidate).
 
 ## Processed-setlist history
 
@@ -86,9 +87,12 @@ A small local web UI wraps the same matching pipeline:
 
 Paste a setlist URL or ID and hit **Preview** — it matches the show against
 your library and shows the matched / missing / fuzzy report *without* creating
-anything. Review it (and tweak the playlist name if you like), then click
-**Create playlist** to commit. Create rebuilds the previewed tracks by their
-Plex rating keys, so nothing is re-matched, and the run is recorded in the same
+anything. When a song matches more than one library track (e.g. the same song
+on a studio album, a live record, and a compilation) the matched row shows a
+**dropdown** so you can pick the version — by album — you want; the best match
+is preselected. Review it (and tweak the playlist name if you like), then click
+**Create playlist** to commit. Create rebuilds the chosen tracks by their Plex
+rating keys, so nothing is re-matched, and the run is recorded in the same
 [history](#processed-setlist-history) the CLI uses.
 
 > **Local only.** The app talks to your local Plex server and holds your Plex

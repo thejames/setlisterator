@@ -57,11 +57,8 @@ def preview():
         return _error("Plex problem", str(exc))
 
     prior = core.load_history(core.history_path()).get(result["setlist_id"])
-    rating_keys = ",".join(
-        str(m["rating_key"]) for m in result["matched"]
-        if m["rating_key"] is not None)
     return render_template(
-        "preview.html", result=result, prior=prior, rating_keys=rating_keys,
+        "preview.html", result=result, prior=prior,
         missing_json=json.dumps(result["missing"]),
         fuzzy_json=json.dumps(result["fuzzy"]))
 
@@ -71,8 +68,8 @@ def create():
     """Build the Plex playlist from the previewed (matched) rating keys."""
     name = (request.form.get("name") or "").strip()
     setlist_id = (request.form.get("setlist_id") or "").strip()
-    rating_keys = [k for k in (request.form.get("rating_keys") or "").split(",")
-                   if k]
+    # One "pick" value per matched song, in setlist order (the chosen track).
+    rating_keys = [k for k in request.form.getlist("pick") if k]
     if not name:
         return _error("Missing name", "A playlist name is required.", 400)
     if not rating_keys:

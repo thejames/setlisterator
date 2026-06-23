@@ -475,7 +475,49 @@ def test_gather_matches_builds_structure(monkeypatch):
     assert [x["rating_key"] for x in result["matched"]] == [10, 11]
     assert result["matched"][1]["track_title"] == "Tweezer (Reprise)"
     assert result["matched"][0]["album"] == "Junta"
+    assert result["matched"][0]["candidates"][0]["rating_key"] == 10
     assert result["missing"] == [(3, "Phish", "Some Rarity")]
+
+
+def test_gather_matches_attaches_multiple_candidates(monkeypatch):
+    # Same song on two albums -> one matched row with two candidates.
+    library = [
+        _FakeTrack("Wilson", "Phish", rating_key=10, album="Junta"),
+        _FakeTrack("Wilson", "Phish", rating_key=99, album="Hampton Comes Alive"),
+        _FakeTrack("Tweezer (Reprise)", "Phish", rating_key=11, album="A Live One"),
+    ]
+    _wire_gather(monkeypatch, library)
+    result = m.gather_matches(_CONFIG, "abc123")
+    wilson = result["matched"][0]
+    assert wilson["title"] == "Wilson"
+    assert [c["rating_key"] for c in wilson["candidates"]] == [10, 99]
+    assert wilson["rating_key"] == 10   # default mirrors the best candidate
+
+
+# --- match_candidates ------------------------------------------------------
+
+def test_match_candidates_ranks_and_dedupes():
+    library = [
+        _FakeTrack("Wilson", "Phish", rating_key=1, album="Junta"),
+        _FakeTrack("Wilson (Live)", "Phish", rating_key=2, album="A Live One"),
+        _FakeTrack("Wilson", "Phish", rating_key=1, album="Junta"),  # dupe key
+    ]
+    cands = m.match_candidates(_FakeSection(), "Wilson", "Phish", library)
+    keys = [c.track.ratingKey for c in cands]
+    assert keys == [1, 2]                      # exact before fuzzy; key 1 once
+    assert cands[0].quality == "exact"
+
+
+def test_match_candidates_respects_limit():
+    library = [_FakeTrack("Wilson", "Phish", rating_key=i) for i in range(10)]
+    cands = m.match_candidates(_FakeSection(), "Wilson", "Phish", library,
+                               limit=3)
+    assert len(cands) == 3
+
+
+def test_match_candidates_empty_when_no_match():
+    library = [_FakeTrack("Totally Different", "Phish", rating_key=1)]
+    assert m.match_candidates(_FakeSection(), "Wilson", "Phish", library) == []
 
 
 def test_gather_matches_empty_setlist_raises(monkeypatch):

@@ -351,14 +351,15 @@ def _title_rank(target_simple, target_aggr, cand_title):
     return None
 
 
-def _best_match(target_simple, target_aggr, tracks, setlist_artist, scoped):
-    """Return (overall_rank, track, quality, tier) for the best track, or None.
+def _ranked_matches(target_simple, target_aggr, tracks, setlist_artist, scoped):
+    """Return [(overall_rank, track, quality, tier), ...] sorted best-first.
 
-    When ``scoped`` is True the tracks are already known to be by the setlist
-    artist, so artist matching is assumed; otherwise it is checked per track
-    and artist mismatches are demoted below every artist-confirmed match.
+    Every track whose title matches at some tier is included. When ``scoped``
+    is True the tracks are already known to be by the setlist artist, so artist
+    matching is assumed; otherwise it is checked per track and artist mismatches
+    are demoted below every artist-confirmed match. Ties keep library order.
     """
-    best = None
+    ranked = []
     for track in tracks:
         title_rank = _title_rank(target_simple, target_aggr, track.title)
         if title_rank is None:
@@ -367,11 +368,16 @@ def _best_match(target_simple, target_aggr, tracks, setlist_artist, scoped):
             artists_match(_track_artist_name(track), setlist_artist)
         overall = title_rank if artist_ok else title_rank + 4
         quality = "exact" if (artist_ok and title_rank == 0) else "fuzzy"
-        if best is None or overall < best[0]:
-            best = (overall, track, quality, TIER_NAMES[title_rank])
-        if overall == 0:
-            break  # can't beat an exact artist+title hit
-    return best
+        ranked.append((overall, track, quality, TIER_NAMES[title_rank]))
+    ranked.sort(key=lambda r: r[0])  # stable: equal-rank ties keep input order
+    return ranked
+
+
+def _best_match(target_simple, target_aggr, tracks, setlist_artist, scoped):
+    """Return the single best (overall_rank, track, quality, tier), or None."""
+    ranked = _ranked_matches(target_simple, target_aggr, tracks,
+                             setlist_artist, scoped)
+    return ranked[0] if ranked else None
 
 
 def resolve_artist(section, setlist_artist):
@@ -402,33 +408,51 @@ def _search_candidates(section, title, target_aggr):
     return candidates
 
 
-def match_song(section, title, setlist_artist, artist_tracks):
-    """Find the best Plex track for a setlist song.
+def match_candidates(section, title, setlist_artist, artist_tracks, limit=5):
+    """Return up to ``limit`` candidate Plex tracks for a setlist song.
 
-    Strategy: first match against ``artist_tracks`` (the setlist artist's own
-    tracks, fetched once) using local normalization — this sidesteps Plex's
-    search tokenizer, which can miss tracks over punctuation/Unicode quirks.
-    Only if that finds nothing do we fall back to a global title search, which
-    also covers songs performed as covers of other artists.
-
-    Returns a Match (track, quality, tier, source), or None for no match.
+    Best-first and deduped by rating key; empty if nothing matched. Strategy:
+    first match against ``artist_tracks`` (the setlist artist's own tracks,
+    fetched once) using local normalization — this sidesteps Plex's search
+    tokenizer, which can miss tracks over punctuation/Unicode quirks. Only if
+    that finds nothing do we fall back to a global title search, which also
+    covers songs performed as covers of other artists. Each item is a
+    Match(track, quality, tier, source).
     """
     target_simple = normalize_simple(title)
     target_aggr = normalize_aggressive(title)
 
-    scoped = _best_match(target_simple, target_aggr, artist_tracks,
-                         setlist_artist, scoped=True)
-    if scoped is not None:
-        _, track, quality, tier = scoped
-        return Match(track, quality, tier, "scoped")
+    ranked = _ranked_matches(target_simple, target_aggr, artist_tracks,
+                             setlist_artist, scoped=True)
+    source = "scoped"
+    if not ranked:
+        searched = _search_candidates(section, title, target_aggr)
+        ranked = _ranked_matches(target_simple, target_aggr, searched,
+                                 setlist_artist, scoped=False)
+        source = "global"
 
-    candidates = _search_candidates(section, title, target_aggr)
-    best = _best_match(target_simple, target_aggr, candidates,
-                       setlist_artist, scoped=False)
-    if best is None:
-        return None
-    _, track, quality, tier = best
-    return Match(track, quality, tier, "global")
+    results = []
+    seen = set()
+    for _, track, quality, tier in ranked:
+        key = getattr(track, "ratingKey", None)
+        dedupe = key if key is not None else id(track)
+        if dedupe in seen:
+            continue
+        seen.add(dedupe)
+        results.append(Match(track, quality, tier, source))
+        if len(results) >= limit:
+            break
+    return results
+
+
+def match_song(section, title, setlist_artist, artist_tracks):
+    """Return the single best Match for a setlist song, or None.
+
+    Thin wrapper over match_candidates so the CLI and existing callers stay on
+    one code path.
+    """
+    candidates = match_candidates(section, title, setlist_artist, artist_tracks)
+    return candidates[0] if candidates else None
 
 
 def unique_playlist_name(plex, name):
@@ -581,42 +605,43 @@ def gather_matches(config, setlist_id, name=None):
         logger.info("Library: '%s' not found as an artist; "
                     "using global track search", show["artist"])
 
-    matched = []
-    missing = []
-    fuzzy = []
-    seen_keys = set()
-    for position, title in enumerate(show["songs"], start=1):
-        match = match_song(section, title, show["artist"], artist_tracks)
-        if match is None:
-            missing.append((position, show["artist"], title))
-            logger.info("  ✗ %2d. %s → no match", position, title)
-            continue
-        track = match.track
-        album = _track_album(track)
-        logger.info("  ✓ %2d. %s → %r on %r  [%s/%s]", position, title,
-                    track.title, album, match.tier, match.source)
-        if match.quality == "fuzzy":
-            got = f"{_track_artist_name(track)} - {track.title}"
-            if album:
-                got += f" [{album}]"
-            fuzzy.append((position, f"{show['artist']} - {title}", got))
-        # Dedupe: a medley track can match more than one setlist song.
-        key = getattr(track, "ratingKey", None)
-        dedupe_key = key if key is not None else id(track)
-        if dedupe_key in seen_keys:
-            continue
-        seen_keys.add(dedupe_key)
-        matched.append({
-            "position": position,
-            "title": title,
-            "track_title": track.title,
-            "track_artist": _track_artist_name(track),
-            "album": album,
-            "rating_key": key,
+    def _describe(match):
+        return {
+            "rating_key": getattr(match.track, "ratingKey", None),
+            "track_title": match.track.title,
+            "track_artist": _track_artist_name(match.track),
+            "album": _track_album(match.track),
             "tier": match.tier,
             "source": match.source,
             "quality": match.quality,
-        })
+        }
+
+    matched = []
+    missing = []
+    fuzzy = []
+    for position, title in enumerate(show["songs"], start=1):
+        candidates = match_candidates(section, title, show["artist"],
+                                      artist_tracks)
+        if not candidates:
+            missing.append((position, show["artist"], title))
+            logger.info("  ✗ %2d. %s → no match", position, title)
+            continue
+        best = candidates[0]
+        album = _track_album(best.track)
+        alt = f"  (+{len(candidates) - 1} alt)" if len(candidates) > 1 else ""
+        logger.info("  ✓ %2d. %s → %r on %r  [%s/%s]%s", position, title,
+                    best.track.title, album, best.tier, best.source, alt)
+        if best.quality == "fuzzy":
+            got = f"{_track_artist_name(best.track)} - {best.track.title}"
+            if album:
+                got += f" [{album}]"
+            fuzzy.append((position, f"{show['artist']} - {title}", got))
+        # One row per setlist song (no dedupe here): each gets its own picker.
+        # Duplicate track choices are collapsed when the playlist is created.
+        entry = {"position": position, "title": title,
+                 "candidates": [_describe(c) for c in candidates]}
+        entry.update(_describe(best))  # default fields mirror the best candidate
+        matched.append(entry)
 
     return {
         "setlist_id": setlist_id,
@@ -643,7 +668,13 @@ def create_playlist(config, name, rating_keys, history_meta=None):
         raise PlexError(str(exc)) from exc
 
     tracks = []
+    seen = set()
     for key in rating_keys:
+        # Dedupe: different setlist songs can resolve to the same track (e.g. a
+        # medley), and it should appear in the playlist only once.
+        if str(key) in seen:
+            continue
+        seen.add(str(key))
         try:
             tracks.append(plex.fetchItem(int(key)))
         except Exception:
@@ -760,8 +791,8 @@ def main(argv=None):
         print(str(exc), file=sys.stderr)
         return EXIT_PLEX
 
-    print_report(final_name, len(rating_keys), result["missing"],
-                 result["fuzzy"])
+    added = len(dict.fromkeys(rating_keys))  # unique tracks actually added
+    print_report(final_name, added, result["missing"], result["fuzzy"])
     return EXIT_OK
 
 

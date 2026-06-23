@@ -27,15 +27,28 @@ def _preview_result():
                  "date": "2026-06-16", "url": "https://setlist.fm/x.html"},
         "playlist_name": "Primus - TD Amp, Charlotte (2026-06-16)",
         "matched": [
+            # single candidate -> rendered as a hidden "pick" input
             {"position": 1, "title": "Tommy the Cat",
              "track_title": "Tommy the Cat", "track_artist": "Primus",
              "album": "Sailing the Seas of Cheese", "rating_key": 10,
-             "tier": "exact", "source": "scoped", "quality": "exact"},
-            {"position": 2, "title": "Hello Skinny",
-             "track_title": "Hello Skinny / Constantinople",
-             "track_artist": "Primus", "album": "The Desaturating Seven",
-             "rating_key": 11, "tier": "medley", "source": "scoped",
-             "quality": "fuzzy"},
+             "tier": "exact", "source": "scoped", "quality": "exact",
+             "candidates": [
+                 {"rating_key": 10, "track_title": "Tommy the Cat",
+                  "track_artist": "Primus",
+                  "album": "Sailing the Seas of Cheese",
+                  "tier": "exact", "source": "scoped", "quality": "exact"}]},
+            # two candidates -> rendered as a <select name="pick">
+            {"position": 2, "title": "Jerry Was a Race Car Driver",
+             "track_title": "Jerry Was a Race Car Driver", "track_artist": "Primus",
+             "album": "Sailing the Seas of Cheese", "rating_key": 20,
+             "tier": "exact", "source": "scoped", "quality": "exact",
+             "candidates": [
+                 {"rating_key": 20, "track_title": "Jerry Was a Race Car Driver",
+                  "track_artist": "Primus", "album": "Sailing the Seas of Cheese",
+                  "tier": "exact", "source": "scoped", "quality": "exact"},
+                 {"rating_key": 21, "track_title": "Jerry Was a Race Car Driver",
+                  "track_artist": "Primus", "album": "Suck on This (Live)",
+                  "tier": "exact", "source": "scoped", "quality": "exact"}]},
         ],
         "missing": [(3, "Primus", "Jilly's on Smack")],
         "fuzzy": [(2, "Primus - Hello Skinny",
@@ -65,10 +78,13 @@ def test_preview_renders_matches(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.data.decode()
     assert "Tommy the Cat" in body                 # matched
-    assert "Hello Skinny / Constantinople" in body  # medley fuzzy
     assert "Sailing the Seas of Cheese" in body     # album surfaced
     assert "Jilly&#39;s on Smack" in body           # missing (HTML-escaped)
-    assert 'value="10,11"' in body                  # rating keys carried forward
+    # single-candidate song -> hidden pick input; multi-candidate -> a <select>
+    assert '<input type="hidden" name="pick" value="10">' in body
+    assert '<select name="pick">' in body
+    assert 'value="21"' in body                     # the alternate album option
+    assert "Suck on This (Live)" in body            # alternate album shown
 
 
 def test_preview_requires_input(client):
@@ -101,12 +117,12 @@ def test_create_builds_playlist(client, monkeypatch):
         "url": "https://setlist.fm/x.html",
         "artist": "Primus",
         "date": "2026-06-16",
-        "rating_keys": "10,11",
+        "pick": ["10", "21"],   # second song: the alternate album was chosen
         "missing_json": '[[3, "Primus", "Jilly\'s on Smack"]]',
         "fuzzy_json": "[]",
     })
     assert resp.status_code == 200
-    assert captured["keys"] == ["10", "11"]
+    assert captured["keys"] == ["10", "21"]   # picks honored in order
     assert captured["meta"]["missing"] == 1
     body = resp.data.decode()
     assert "Primus - TD Amp (2)" in body         # final (suffixed) name shown
@@ -114,5 +130,5 @@ def test_create_builds_playlist(client, monkeypatch):
 
 
 def test_create_requires_keys(client):
-    resp = client.post("/create", data={"name": "X", "rating_keys": ""})
+    resp = client.post("/create", data={"name": "X"})  # no "pick" values
     assert resp.status_code == 400

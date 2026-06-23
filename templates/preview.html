@@ -18,35 +18,53 @@
   <span class="fz">~ {{ result.fuzzy|length }} fuzzy</span>
 </p>
 
+{# The matched table lives inside the form so each per-song <select name="pick">
+   submits the chosen track, in setlist order. #}
 <form method="post" action="{{ url_for('create') }}">
-  <input type="hidden" name="rating_keys" value="{{ rating_keys }}">
   <input type="hidden" name="setlist_id" value="{{ result.setlist_id }}">
   <input type="hidden" name="url" value="{{ result.show.url }}">
   <input type="hidden" name="artist" value="{{ result.show.artist }}">
   <input type="hidden" name="date" value="{{ result.show.date }}">
   <input type="hidden" name="missing_json" value="{{ missing_json }}">
   <input type="hidden" name="fuzzy_json" value="{{ fuzzy_json }}">
+
   <label>Playlist name
     <input name="name" value="{{ result.playlist_name }}" required>
   </label>
   <button type="submit">Create playlist ({{ result.matched|length }} tracks)</button>
-</form>
 
-{% if result.matched %}
-<h2>Matched ({{ result.matched|length }})</h2>
-<table>
-  <tr><th>#</th><th>Setlist song</th><th>Plex track</th><th>Album</th><th>Match</th></tr>
-  {% for m in result.matched %}
-  <tr class="{{ 'fuzzy' if m.quality == 'fuzzy' else 'exact' }}">
-    <td>{{ m.position }}</td>
-    <td>{{ m.title }}</td>
-    <td>{{ m.track_artist }} — {{ m.track_title }}</td>
-    <td>{{ m.album }}</td>
-    <td>{{ m.tier }}/{{ m.source }}</td>
-  </tr>
-  {% endfor %}
-</table>
-{% endif %}
+  {% if result.matched %}
+  <h2>Matched ({{ result.matched|length }})</h2>
+  <p class="hint">Songs with more than one library match show a dropdown —
+    pick the version (album) you want before creating.</p>
+  <table>
+    <tr><th>#</th><th>Setlist song</th><th>Plex track</th><th>Match</th></tr>
+    {% for m in result.matched %}
+    <tr class="{{ 'fuzzy' if m.quality == 'fuzzy' else 'exact' }}">
+      <td>{{ m.position }}</td>
+      <td>{{ m.title }}</td>
+      <td>
+        {% if m.candidates|length > 1 %}
+        <select name="pick">
+          {% for c in m.candidates %}
+          <option value="{{ c.rating_key }}">
+            {{ c.track_artist }} — {{ c.track_title }}{% if c.album %} · {{ c.album }}{% endif %}
+            [{{ c.tier }}/{{ c.source }}]
+          </option>
+          {% endfor %}
+        </select>
+        {% else %}
+        {{ m.track_artist }} — {{ m.track_title }}{% if m.album %} · {{ m.album }}{% endif %}
+        <input type="hidden" name="pick" value="{{ m.rating_key }}">
+        {% endif %}
+      </td>
+      <td>{{ m.tier }}/{{ m.source }}{% if m.candidates|length > 1 %}
+        <span class="hint">+{{ m.candidates|length - 1 }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</form>
 
 {% if result.missing %}
 <h2 class="miss">Missing ({{ result.missing|length }}) — go buy these</h2>
