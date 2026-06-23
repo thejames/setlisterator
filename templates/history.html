@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}History — Setlist-er-ator{% endblock %}
+{% block content %}
+<h2>History ({{ entries|length }})</h2>
+
+{% if entries %}
+<table>
+  <tr>
+    <th>Processed</th><th>Show</th><th>Playlist</th>
+    <th>Tracks</th><th></th>
+  </tr>
+  {% for e in entries %}
+  <tr>
+    <td>{{ e.get("processed_at", "—") }}</td>
+    <td>{{ e.get("artist", "Unknown") }} — ({{ e.get("date", "?") }})</td>
+    <td>{{ e.get("playlist_name", "—") }}</td>
+    <td>{{ e.get("matched", 0) }} added{% if e.get("missing") %}
+        <span class="miss">· {{ e.get("missing") }} missing</span>{% endif %}</td>
+    <td>
+      <form method="post" action="{{ url_for('preview') }}" style="margin:0">
+        <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
+        <button type="submit">Re-open</button>
+      </form>
+      {% if e.get("url") %}
+      <a href="{{ e.url }}" target="_blank" rel="noopener">setlist.fm ↗</a>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No history yet — <a href="{{ url_for('index') }}">create a playlist</a> and
+  it'll show up here.</p>
+{% endif %}
+{% endblock %}

@@ -96,6 +96,10 @@ is preselected. Review it (and tweak the playlist name if you like), then click
 rating keys, so nothing is re-matched, and the run is recorded in the same
 [history](#processed-setlist-history) the CLI uses.
 
+The top navbar's **History** link opens a page listing every show you've
+created, newest first; each row re-opens that setlist in Preview or links out to
+its setlist.fm source.
+
 > **Local only.** The app talks to your local Plex server and holds your Plex
 > token, so it binds to `127.0.0.1` and has no authentication. Don't expose it
 > to a network.

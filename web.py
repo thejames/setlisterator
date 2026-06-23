@@ -35,6 +35,15 @@ def index():
     return render_template("index.html")
 
 
+@app.get("/history")
+def history():
+    """List previously created playlists from the JSON history file."""
+    # No config needed — this only reads the local history file.
+    entries = list(core.load_history(core.history_path()).values())
+    entries.sort(key=lambda e: e.get("processed_at", ""), reverse=True)
+    return render_template("history.html", entries=entries)
+
+
 @app.post("/preview")
 def preview():
     """Match the setlist and show the result without creating anything."""

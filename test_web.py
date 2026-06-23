@@ -68,6 +68,38 @@ def test_index_ok(client):
     assert b"setlist.fm URL or ID" in resp.data
 
 
+def test_navbar_present(client):
+    body = client.get("/").data.decode()
+    assert "Setlist-er-ator" in body            # brand
+    assert 'href="/history"' in body            # History link
+
+
+def test_history_lists_entries_newest_first(client, monkeypatch):
+    monkeypatch.setattr(core, "load_history", lambda path: {
+        "old": {"id": "old", "artist": "Phish", "date": "2023-12-31",
+                "playlist_name": "Phish — MSG", "processed_at": "2026-06-20",
+                "matched": 21, "missing": 0,
+                "url": "https://setlist.fm/phish.html"},
+        "new": {"id": "new", "artist": "Primus", "date": "2026-06-16",
+                "playlist_name": "Primus — TD Amp", "processed_at": "2026-06-23",
+                "matched": 8, "missing": 4,
+                "url": "https://setlist.fm/primus.html"},
+    })
+    body = client.get("/history").data.decode()
+    assert "Phish — MSG" in body and "Primus — TD Amp" in body
+    # newest processed_at first
+    assert body.index("Primus — TD Amp") < body.index("Phish — MSG")
+    # Re-open posts the stored URL to the existing preview route
+    assert 'name="setlist" value="https://setlist.fm/primus.html"' in body
+    assert "4 missing" in body
+
+
+def test_history_empty(client, monkeypatch):
+    monkeypatch.setattr(core, "load_history", lambda path: {})
+    body = client.get("/history").data.decode()
+    assert "No history yet" in body
+
+
 def test_index_config_error(client, monkeypatch):
     def raise_cfg():
         raise core.ConfigError("Missing required environment variable(s): X")

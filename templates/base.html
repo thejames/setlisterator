@@ -10,8 +10,14 @@
       font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
       max-width: 1040px; margin: 2rem auto; padding: 0 1rem;
     }
-    h1 { font-size: 1.4rem; margin-bottom: 1.5rem; }
-    h1 a { color: inherit; text-decoration: none; }
+    .navbar {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 1rem; margin-bottom: 1.5rem; padding-bottom: 0.8rem;
+      border-bottom: 1px solid #8884;
+    }
+    .brand { font-size: 1.4rem; font-weight: 700; color: inherit;
+      text-decoration: none; }
+    .navlinks { display: flex; gap: 1.2rem; font-weight: 600; }
     h2 { font-size: 1.1rem; margin: 1.6rem 0 0.5rem; }
     a { color: #2563eb; }
     label { display: block; margin: 0.8rem 0; font-weight: 600; }
@@ -49,7 +55,13 @@
   </style>
 </head>
 <body>
-  <h1><a href="{{ url_for('index') }}">Setlist-er-ator</a></h1>
+  <nav class="navbar">
+    <a class="brand" href="{{ url_for('index') }}">Setlist-er-ator</a>
+    <span class="navlinks">
+      <a href="{{ url_for('index') }}">New</a>
+      <a href="{{ url_for('history') }}">History</a>
+    </span>
+  </nav>
   {% block content %}{% endblock %}
 </body>
 </html>
