@@ -694,7 +694,7 @@ def create_playlist(config, name, rating_keys, history_meta=None):
     except plex_exceptions.PlexApiException as exc:
         raise PlexError(f"Failed to create playlist: {exc}") from exc
 
-    if history_meta is not None:
+    if history_meta is not None and history_meta.get("id"):
         setlist_id = history_meta["id"]
         hist_file = history_path()
         history = load_history(hist_file)

@@ -31,7 +31,11 @@
   <label>Playlist name
     <input name="name" value="{{ result.playlist_name }}" required>
   </label>
+  {% if result.matched %}
   <button type="submit">Create playlist ({{ result.matched|length }} tracks)</button>
+  {% else %}
+  <button type="submit" disabled>Nothing in your library to add</button>
+  {% endif %}
 
   {% if result.songs %}
   <h2>Setlist ({{ result.songs|length }} songs · {{ result.matched|length }} in library)</h2>

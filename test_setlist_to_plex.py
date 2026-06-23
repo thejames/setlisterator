@@ -579,3 +579,13 @@ def test_create_playlist_no_history_when_meta_none(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "history_path", lambda: hist)
     m.create_playlist(_CONFIG, "PL", ["1"], history_meta=None)
     assert not hist.exists()
+
+
+def test_create_playlist_skips_history_with_blank_id(monkeypatch, tmp_path):
+    # A meta with an empty id must not write a junk history entry keyed by "".
+    fake = _FakeCreatePlex()
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: fake)
+    hist = tmp_path / "history.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.create_playlist(_CONFIG, "PL", ["1"], history_meta={"id": ""})
+    assert not hist.exists()

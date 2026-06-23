@@ -136,6 +136,24 @@ def test_preview_requires_input(client):
     assert resp.status_code == 400
 
 
+def test_preview_disables_create_when_no_matches(client, monkeypatch):
+    # A setlist where nothing is in the library: full setlist still shows,
+    # but the create button is disabled.
+    all_missing = {
+        "setlist_id": "abc", "playlist_name": "Nobody — Nowhere",
+        "show": {"artist": "Nobody", "venue": "Nowhere", "city": "X",
+                 "date": "2026-01-01", "url": ""},
+        "matched": [], "missing": [(1, "Nobody", "Some Song")], "fuzzy": [],
+        "songs": [{"position": 1, "title": "Some Song", "matched": False,
+                   "artist": "Nobody"}],
+    }
+    monkeypatch.setattr(core, "gather_matches", lambda c, s, n=None: all_missing)
+    monkeypatch.setattr(core, "load_history", lambda p: {})
+    body = client.post("/preview", data={"setlist": "abc"}).data.decode()
+    assert "<button type=\"submit\" disabled>" in body
+    assert "Some Song" in body            # still shows the (missing) setlist
+
+
 def test_preview_setlist_error(client, monkeypatch):
     def boom(cfg, sid, name=None):
         raise core.SetlistError("No setlist found with ID 'abc123'.")
