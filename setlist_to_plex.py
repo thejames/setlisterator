@@ -299,6 +299,11 @@ def _track_artist_name(track):
         getattr(track, "originalTitle", None) or ""
 
 
+def _track_album(track):
+    """The album a Plex track is pulled from (parentTitle)."""
+    return getattr(track, "parentTitle", None) or ""
+
+
 # A resolved match for one setlist song. tier is one of TIER_NAMES; source is
 # 'scoped' (the artist's own tracks) or 'global' (fallback title search).
 Match = namedtuple("Match", "track quality tier source")
@@ -587,10 +592,13 @@ def gather_matches(config, setlist_id, name=None):
             logger.info("  ✗ %2d. %s → no match", position, title)
             continue
         track = match.track
-        logger.info("  ✓ %2d. %s → %r  [%s/%s]", position, title,
-                    track.title, match.tier, match.source)
+        album = _track_album(track)
+        logger.info("  ✓ %2d. %s → %r on %r  [%s/%s]", position, title,
+                    track.title, album, match.tier, match.source)
         if match.quality == "fuzzy":
             got = f"{_track_artist_name(track)} - {track.title}"
+            if album:
+                got += f" [{album}]"
             fuzzy.append((position, f"{show['artist']} - {title}", got))
         # Dedupe: a medley track can match more than one setlist song.
         key = getattr(track, "ratingKey", None)
@@ -603,6 +611,7 @@ def gather_matches(config, setlist_id, name=None):
             "title": title,
             "track_title": track.title,
             "track_artist": _track_artist_name(track),
+            "album": album,
             "rating_key": key,
             "tier": match.tier,
             "source": match.source,

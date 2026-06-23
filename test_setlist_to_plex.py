@@ -219,10 +219,11 @@ def test_unique_name_ignores_titleless_objects():
 # ---------------------------------------------------------------------------
 
 class _FakeTrack:
-    def __init__(self, title, artist, rating_key=None):
+    def __init__(self, title, artist, rating_key=None, album="Some Album"):
         self.title = title
         self.grandparentTitle = artist
         self.originalTitle = None
+        self.parentTitle = album
         self.ratingKey = rating_key
 
 
@@ -465,14 +466,15 @@ def _wire_gather(monkeypatch, library_tracks):
 
 def test_gather_matches_builds_structure(monkeypatch):
     library = [
-        _FakeTrack("Wilson", "Phish", rating_key=10),
-        _FakeTrack("Tweezer (Reprise)", "Phish", rating_key=11),
+        _FakeTrack("Wilson", "Phish", rating_key=10, album="Junta"),
+        _FakeTrack("Tweezer (Reprise)", "Phish", rating_key=11, album="A Live One"),
     ]
     _wire_gather(monkeypatch, library)
     result = m.gather_matches(_CONFIG, "abc123")
     assert result["playlist_name"] == "Phish - MSG, New York (2023-12-31)"
     assert [x["rating_key"] for x in result["matched"]] == [10, 11]
     assert result["matched"][1]["track_title"] == "Tweezer (Reprise)"
+    assert result["matched"][0]["album"] == "Junta"
     assert result["missing"] == [(3, "Phish", "Some Rarity")]
 
 

@@ -35,12 +35,13 @@
 {% if result.matched %}
 <h2>Matched ({{ result.matched|length }})</h2>
 <table>
-  <tr><th>#</th><th>Setlist song</th><th>Plex track</th><th>Match</th></tr>
+  <tr><th>#</th><th>Setlist song</th><th>Plex track</th><th>Album</th><th>Match</th></tr>
   {% for m in result.matched %}
   <tr class="{{ 'fuzzy' if m.quality == 'fuzzy' else 'exact' }}">
     <td>{{ m.position }}</td>
     <td>{{ m.title }}</td>
     <td>{{ m.track_artist }} — {{ m.track_title }}</td>
+    <td>{{ m.album }}</td>
     <td>{{ m.tier }}/{{ m.source }}</td>
   </tr>
   {% endfor %}

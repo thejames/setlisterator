@@ -29,12 +29,13 @@ def _preview_result():
         "matched": [
             {"position": 1, "title": "Tommy the Cat",
              "track_title": "Tommy the Cat", "track_artist": "Primus",
-             "rating_key": 10, "tier": "exact", "source": "scoped",
-             "quality": "exact"},
+             "album": "Sailing the Seas of Cheese", "rating_key": 10,
+             "tier": "exact", "source": "scoped", "quality": "exact"},
             {"position": 2, "title": "Hello Skinny",
              "track_title": "Hello Skinny / Constantinople",
-             "track_artist": "Primus", "rating_key": 11, "tier": "medley",
-             "source": "scoped", "quality": "fuzzy"},
+             "track_artist": "Primus", "album": "The Desaturating Seven",
+             "rating_key": 11, "tier": "medley", "source": "scoped",
+             "quality": "fuzzy"},
         ],
         "missing": [(3, "Primus", "Jilly's on Smack")],
         "fuzzy": [(2, "Primus - Hello Skinny",
@@ -65,6 +66,7 @@ def test_preview_renders_matches(client, monkeypatch):
     body = resp.data.decode()
     assert "Tommy the Cat" in body                 # matched
     assert "Hello Skinny / Constantinople" in body  # medley fuzzy
+    assert "Sailing the Seas of Cheese" in body     # album surfaced
     assert "Jilly&#39;s on Smack" in body           # missing (HTML-escaped)
     assert 'value="10,11"' in body                  # rating keys carried forward
 

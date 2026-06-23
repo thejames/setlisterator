@@ -52,15 +52,17 @@ failing.
 
 The actionable **report** (playlist name, missing, fuzzy) goes to **stdout**.
 Per-song match decisions are logged to **stderr** (on by default; `--quiet` to
-silence), one line per song with the matched track, tier, and source:
+silence), one line per song with the matched track, its album, tier, and source:
 
 ```
 Setlist: Primus — TD Amp Ballantyne, Charlotte (2026-06-16) — 12 songs
 Library: matching against 214 tracks by Primus
-  ✓  1. Tommy the Cat → 'Tommy the Cat'  [exact/scoped]
-  ✓  7. Hello Skinny → 'Hello Skinny / Constantinople'  [medley/scoped]
+  ✓  1. Tommy the Cat → 'Tommy the Cat' on 'Sailing the Seas of Cheese'  [exact/scoped]
+  ✓  7. Hello Skinny → 'Hello Skinny / Constantinople' on 'The Desaturating Seven'  [medley/scoped]
   ✗  5. Jilly's on Smack → no match
 ```
+
+The web Preview also shows the source album as a column in the matched table.
 
 ## Processed-setlist history
 
