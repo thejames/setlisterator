@@ -75,6 +75,43 @@ EXIT_SETLIST = 3       # setlist fetch / parse problems
 EXIT_PLEX = 4          # Plex connection / library problems
 
 
+class ConfigError(Exception):
+    """Required environment configuration is missing or invalid."""
+
+
+class SetlistError(Exception):
+    """A setlist could not be fetched, parsed, or had no playable songs."""
+
+
+class PlexError(Exception):
+    """Connecting to Plex, finding the library, or creating a playlist failed."""
+
+
+def load_config():
+    """Read configuration from the environment (and a .env file).
+
+    Returns a dict with api_key, plex_baseurl, plex_token, music_library.
+    Raises ConfigError listing any missing required variables.
+    """
+    load_dotenv()
+    config = {
+        "api_key": os.environ.get("SETLISTFM_API_KEY"),
+        "plex_baseurl": os.environ.get("PLEX_BASEURL"),
+        "plex_token": os.environ.get("PLEX_TOKEN"),
+        "music_library": os.environ.get("PLEX_MUSIC_LIBRARY", "Music"),
+    }
+    missing = [name for name, key in (
+        ("SETLISTFM_API_KEY", "api_key"),
+        ("PLEX_BASEURL", "plex_baseurl"),
+        ("PLEX_TOKEN", "plex_token"),
+    ) if not config[key]]
+    if missing:
+        raise ConfigError(
+            "Missing required environment variable(s): " + ", ".join(missing)
+            + ". Set them in a .env file or your environment.")
+    return config
+
+
 # ---------------------------------------------------------------------------
 # Normalization & matching helpers
 # ---------------------------------------------------------------------------
@@ -492,6 +529,150 @@ def print_report(playlist_name, added_count, missing, fuzzy):
 
 
 # ---------------------------------------------------------------------------
+# Core pipeline (shared by the CLI and the web app)
+# ---------------------------------------------------------------------------
+
+def gather_matches(config, setlist_id, name=None):
+    """Fetch a setlist and match every song against the Plex library.
+
+    Read-only: no playlist is created. Returns a dict with the show metadata,
+    the resolved playlist name, and matched/missing/fuzzy lists (matched
+    entries are deduped and carry the Plex track rating key so a playlist can
+    be built later without re-matching). Raises SetlistError or PlexError (with
+    a human-readable message) on failure.
+    """
+    try:
+        data = fetch_setlist(setlist_id, config["api_key"])
+        show = extract_show(data)
+    except (LookupError, PermissionError, ConnectionError, RuntimeError) as exc:
+        raise SetlistError(str(exc)) from exc
+    if not show["songs"]:
+        raise SetlistError(
+            f"Setlist '{setlist_id}' has no playable songs "
+            "(empty setlist or all tape/intro entries).")
+
+    playlist_name = name or build_playlist_name(show)
+    logger.info("Setlist: %s — %s, %s (%s) — %d songs", show["artist"],
+                show["venue"], show["city"], show["date"], len(show["songs"]))
+    if show["url"]:
+        logger.info("Source:  %s", show["url"])
+
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+        section = get_music_section(plex, config["music_library"])
+    except (PermissionError, ConnectionError, LookupError) as exc:
+        raise PlexError(str(exc)) from exc
+
+    artist = resolve_artist(section, show["artist"])
+    artist_tracks = []
+    if artist is not None:
+        try:
+            artist_tracks = artist.tracks()
+        except Exception:
+            artist_tracks = []
+        logger.info("Library: matching against %d tracks by %s",
+                    len(artist_tracks), artist.title)
+    else:
+        logger.info("Library: '%s' not found as an artist; "
+                    "using global track search", show["artist"])
+
+    matched = []
+    missing = []
+    fuzzy = []
+    seen_keys = set()
+    for position, title in enumerate(show["songs"], start=1):
+        match = match_song(section, title, show["artist"], artist_tracks)
+        if match is None:
+            missing.append((position, show["artist"], title))
+            logger.info("  ✗ %2d. %s → no match", position, title)
+            continue
+        track = match.track
+        logger.info("  ✓ %2d. %s → %r  [%s/%s]", position, title,
+                    track.title, match.tier, match.source)
+        if match.quality == "fuzzy":
+            got = f"{_track_artist_name(track)} - {track.title}"
+            fuzzy.append((position, f"{show['artist']} - {title}", got))
+        # Dedupe: a medley track can match more than one setlist song.
+        key = getattr(track, "ratingKey", None)
+        dedupe_key = key if key is not None else id(track)
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        matched.append({
+            "position": position,
+            "title": title,
+            "track_title": track.title,
+            "track_artist": _track_artist_name(track),
+            "rating_key": key,
+            "tier": match.tier,
+            "source": match.source,
+            "quality": match.quality,
+        })
+
+    return {
+        "setlist_id": setlist_id,
+        "show": show,
+        "playlist_name": playlist_name,
+        "matched": matched,
+        "missing": missing,
+        "fuzzy": fuzzy,
+    }
+
+
+def create_playlist(config, name, rating_keys, history_meta=None):
+    """Create a Plex playlist from track rating keys and record history.
+
+    ``rating_keys`` is an ordered list of Plex track rating keys (as produced
+    by gather_matches). ``history_meta`` is an optional dict of show fields
+    (id/url/artist/date/missing) to record once the playlist exists. Returns
+    the final (possibly suffix-deduped) playlist name. Raises PlexError on
+    failure.
+    """
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    except (PermissionError, ConnectionError) as exc:
+        raise PlexError(str(exc)) from exc
+
+    tracks = []
+    for key in rating_keys:
+        try:
+            tracks.append(plex.fetchItem(int(key)))
+        except Exception:
+            logger.warning("Could not fetch track %s; skipping.", key)
+    if not tracks:
+        raise PlexError("None of the matched tracks could be loaded "
+                        "from Plex; playlist not created.")
+
+    final_name = unique_playlist_name(plex, name)
+    try:
+        plex.createPlaylist(final_name, items=tracks)
+    except plex_exceptions.PlexApiException as exc:
+        raise PlexError(f"Failed to create playlist: {exc}") from exc
+
+    if history_meta is not None:
+        setlist_id = history_meta["id"]
+        hist_file = history_path()
+        history = load_history(hist_file)
+        history[setlist_id] = {
+            "id": setlist_id,
+            "url": history_meta.get("url", ""),
+            "artist": history_meta.get("artist", ""),
+            "date": history_meta.get("date", ""),
+            "playlist_name": final_name,
+            "processed_at": datetime.now().isoformat(timespec="seconds"),
+            "matched": len(tracks),
+            "missing": history_meta.get("missing", 0),
+        }
+        try:
+            save_history(hist_file, history)
+        except OSError as exc:
+            logger.warning("Could not write history at %s (%s).",
+                           hist_file, exc)
+
+    return final_name
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -517,27 +698,12 @@ def main(argv=None):
         level=logging.WARNING if args.quiet else logging.INFO,
         format="%(message)s", stream=sys.stderr)
 
-    load_dotenv()
-    api_key = os.environ.get("SETLISTFM_API_KEY")
-    plex_baseurl = os.environ.get("PLEX_BASEURL")
-    plex_token = os.environ.get("PLEX_TOKEN")
-    music_library = os.environ.get("PLEX_MUSIC_LIBRARY", "Music")
-
-    missing_config = [
-        var for var, val in (
-            ("SETLISTFM_API_KEY", api_key),
-            ("PLEX_BASEURL", plex_baseurl),
-            ("PLEX_TOKEN", plex_token),
-        ) if not val
-    ]
-    if missing_config:
-        print("Missing required environment variable(s): "
-              + ", ".join(missing_config), file=sys.stderr)
-        print("Set them in a .env file or your environment. See the module "
-              "docstring for details.", file=sys.stderr)
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr)
         return EXIT_CONFIG
 
-    # --- Fetch & parse setlist -------------------------------------------
     try:
         setlist_id = parse_setlist_id(args.setlist)
     except ValueError as exc:
@@ -546,107 +712,47 @@ def main(argv=None):
 
     # Skip work if we've already built a playlist for this setlist (checked
     # before the API call to save quota). --force / --no-history bypass this.
-    hist_file = history_path()
-    history = {} if args.no_history else load_history(hist_file)
-    if not args.no_history and not should_process(
-            history, setlist_id, args.force, sys.stdin.isatty()):
-        return EXIT_OK
+    if not args.no_history:
+        history = load_history(history_path())
+        if not should_process(history, setlist_id, args.force,
+                              sys.stdin.isatty()):
+            return EXIT_OK
 
+    # --- Match -----------------------------------------------------------
     try:
-        data = fetch_setlist(setlist_id, api_key)
-    except (LookupError, PermissionError, ConnectionError, RuntimeError) as exc:
+        result = gather_matches(config, setlist_id, args.name)
+    except SetlistError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_SETLIST
-
-    show = extract_show(data)
-    if not show["songs"]:
-        print(f"Setlist '{setlist_id}' has no playable songs "
-              "(empty setlist or all tape/intro entries).", file=sys.stderr)
-        return EXIT_SETLIST
-
-    playlist_name = args.name or build_playlist_name(show)
-    logger.info("Setlist: %s — %s, %s (%s) — %d songs", show["artist"],
-                show["venue"], show["city"], show["date"], len(show["songs"]))
-    if show["url"]:
-        logger.info("Source:  %s", show["url"])
-
-    # --- Connect to Plex --------------------------------------------------
-    try:
-        plex = connect_plex(plex_baseurl, plex_token)
-        section = get_music_section(plex, music_library)
-    except (PermissionError, ConnectionError, LookupError) as exc:
+    except PlexError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_PLEX
 
-    # Resolve the setlist artist once and pull their tracks for local matching.
-    artist = resolve_artist(section, show["artist"])
-    artist_tracks = []
-    if artist is not None:
-        try:
-            artist_tracks = artist.tracks()
-        except Exception:
-            artist_tracks = []
-        logger.info("Library: matching against %d tracks by %s",
-                    len(artist_tracks), artist.title)
-    else:
-        logger.info("Library: '%s' not found as an artist; "
-                    "using global track search", show["artist"])
-
-    # --- Match each song --------------------------------------------------
-    matched_tracks = []
-    missing = []
-    fuzzy = []
-    seen_keys = set()
-    for position, title in enumerate(show["songs"], start=1):
-        match = match_song(section, title, show["artist"], artist_tracks)
-        if match is None:
-            missing.append((position, show["artist"], title))
-            logger.info("  ✗ %2d. %s → no match", position, title)
-            continue
-        track = match.track
-        logger.info("  ✓ %2d. %s → %r  [%s/%s]", position, title,
-                    track.title, match.tier, match.source)
-        if match.quality == "fuzzy":
-            got = f"{_track_artist_name(track)} - {track.title}"
-            fuzzy.append((position, f"{show['artist']} - {title}", got))
-        # Dedupe: a medley track can match more than one setlist song.
-        key = getattr(track, "ratingKey", None) or id(track)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-        matched_tracks.append(track)
-
-    if not matched_tracks:
-        print_report(playlist_name, 0, missing, fuzzy)
+    if not result["matched"]:
+        print_report(result["playlist_name"], 0, result["missing"],
+                     result["fuzzy"])
         print("No tracks matched — playlist not created.", file=sys.stderr)
         return EXIT_OK
 
     # --- Create the playlist ---------------------------------------------
-    final_name = unique_playlist_name(plex, playlist_name)
+    rating_keys = [m["rating_key"] for m in result["matched"]
+                   if m["rating_key"] is not None]
+    history_meta = None if args.no_history else {
+        "id": setlist_id,
+        "url": result["show"]["url"],
+        "artist": result["show"]["artist"],
+        "date": result["show"]["date"],
+        "missing": len(result["missing"]),
+    }
     try:
-        plex.createPlaylist(final_name, items=matched_tracks)
-    except plex_exceptions.PlexApiException as exc:
-        print(f"Failed to create playlist: {exc}", file=sys.stderr)
+        final_name = create_playlist(
+            config, result["playlist_name"], rating_keys, history_meta)
+    except PlexError as exc:
+        print(str(exc), file=sys.stderr)
         return EXIT_PLEX
 
-    # Record the run only now that a playlist actually exists.
-    if not args.no_history:
-        history[setlist_id] = {
-            "id": setlist_id,
-            "url": show["url"],
-            "artist": show["artist"],
-            "date": show["date"],
-            "playlist_name": final_name,
-            "processed_at": datetime.now().isoformat(timespec="seconds"),
-            "matched": len(matched_tracks),
-            "missing": len(missing),
-        }
-        try:
-            save_history(hist_file, history)
-        except OSError as exc:
-            logger.warning("Could not write history at %s (%s).", hist_file, exc)
-
-    print_report(final_name, len(matched_tracks), missing, fuzzy)
+    print_report(final_name, len(rating_keys), result["missing"],
+                 result["fuzzy"])
     return EXIT_OK
 
 

@@ -412,3 +412,122 @@ def test_should_process_tty_prompts_no():
     answered = m.should_process(history, "abc", force=False, is_tty=True,
                                 prompt_fn=lambda _: "")
     assert answered is False
+
+
+# ---------------------------------------------------------------------------
+# Core pipeline: load_config / gather_matches / create_playlist
+# ---------------------------------------------------------------------------
+
+_CONFIG = {"api_key": "k", "plex_baseurl": "http://x", "plex_token": "t",
+           "music_library": "Music"}
+
+
+def test_load_config_raises_on_missing(monkeypatch):
+    monkeypatch.setattr(m, "load_dotenv", lambda *a, **k: None)
+    monkeypatch.delenv("SETLISTFM_API_KEY", raising=False)
+    monkeypatch.delenv("PLEX_BASEURL", raising=False)
+    monkeypatch.delenv("PLEX_TOKEN", raising=False)
+    with pytest.raises(m.ConfigError) as exc:
+        m.load_config()
+    assert "SETLISTFM_API_KEY" in str(exc.value)
+
+
+def test_load_config_ok(monkeypatch):
+    monkeypatch.setattr(m, "load_dotenv", lambda *a, **k: None)
+    monkeypatch.setenv("SETLISTFM_API_KEY", "k")
+    monkeypatch.setenv("PLEX_BASEURL", "http://x")
+    monkeypatch.setenv("PLEX_TOKEN", "t")
+    monkeypatch.delenv("PLEX_MUSIC_LIBRARY", raising=False)
+    config = m.load_config()
+    assert config["api_key"] == "k" and config["music_library"] == "Music"
+
+
+def _gather_setlist_data():
+    return {
+        "artist": {"name": "Phish"},
+        "venue": {"name": "MSG", "city": {"name": "New York"}},
+        "eventDate": "31-12-2023",
+        "url": "https://setlist.fm/x.html",
+        "sets": {"set": [{"song": [
+            {"name": "Wilson"},
+            {"name": "Tweezer Reprise"},   # matches "Tweezer (Reprise)"
+            {"name": "Some Rarity"},        # not in library -> missing
+        ]}]},
+    }
+
+
+def _wire_gather(monkeypatch, library_tracks):
+    monkeypatch.setattr(m, "fetch_setlist", lambda sid, key: _gather_setlist_data())
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: object())
+    section = _FakeSection(artists=[_FakeArtist("Phish", library_tracks)])
+    monkeypatch.setattr(m, "get_music_section", lambda plex, lib: section)
+
+
+def test_gather_matches_builds_structure(monkeypatch):
+    library = [
+        _FakeTrack("Wilson", "Phish", rating_key=10),
+        _FakeTrack("Tweezer (Reprise)", "Phish", rating_key=11),
+    ]
+    _wire_gather(monkeypatch, library)
+    result = m.gather_matches(_CONFIG, "abc123")
+    assert result["playlist_name"] == "Phish - MSG, New York (2023-12-31)"
+    assert [x["rating_key"] for x in result["matched"]] == [10, 11]
+    assert result["matched"][1]["track_title"] == "Tweezer (Reprise)"
+    assert result["missing"] == [(3, "Phish", "Some Rarity")]
+
+
+def test_gather_matches_empty_setlist_raises(monkeypatch):
+    monkeypatch.setattr(m, "fetch_setlist", lambda sid, key: {"artist": {}})
+    with pytest.raises(m.SetlistError):
+        m.gather_matches(_CONFIG, "abc123")
+
+
+def test_gather_matches_setlist_error_wraps(monkeypatch):
+    def boom(sid, key):
+        raise LookupError("no such setlist")
+    monkeypatch.setattr(m, "fetch_setlist", boom)
+    with pytest.raises(m.SetlistError):
+        m.gather_matches(_CONFIG, "abc123")
+
+
+class _FakeCreatePlex:
+    def __init__(self):
+        self.created = None
+
+    def fetchItem(self, key):
+        return _FakeTrack(f"track-{key}", "Phish", rating_key=key)
+
+    def playlists(self):
+        return []
+
+    def createPlaylist(self, title, items=None):
+        self.created = (title, list(items))
+        return object()
+
+
+def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
+    fake = _FakeCreatePlex()
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: fake)
+    hist = tmp_path / "history.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+
+    name = m.create_playlist(
+        _CONFIG, "Phish - MSG", ["10", "11"],
+        history_meta={"id": "abc123", "url": "u", "artist": "Phish",
+                      "date": "2023-12-31", "missing": 1})
+
+    assert name == "Phish - MSG"
+    assert fake.created[0] == "Phish - MSG"
+    assert len(fake.created[1]) == 2          # two tracks fetched + added
+    saved = m.load_history(hist)
+    assert saved["abc123"]["playlist_name"] == "Phish - MSG"
+    assert saved["abc123"]["matched"] == 2
+
+
+def test_create_playlist_no_history_when_meta_none(monkeypatch, tmp_path):
+    fake = _FakeCreatePlex()
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: fake)
+    hist = tmp_path / "history.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.create_playlist(_CONFIG, "PL", ["1"], history_meta=None)
+    assert not hist.exists()

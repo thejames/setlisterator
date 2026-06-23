@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Created — setlist → plex{% endblock %}
+{% block content %}
+<p class="ok big">✓ Created “{{ name }}” — {{ added }} track{{ '' if added == 1 else 's' }} added.</p>
+
+{% if missing %}
+<h2 class="miss">Still missing ({{ missing|length }}) — go buy these</h2>
+<ol>
+  {% for row in missing %}
+  <li>{{ row[1] }} - {{ row[2] }}</li>
+  {% endfor %}
+</ol>
+{% endif %}
+
+<p><a href="{{ url_for('index') }}">← do another</a></p>
+{% endblock %}

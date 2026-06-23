@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<form method="post" action="{{ url_for('preview') }}">
+  <label>setlist.fm URL or ID
+    <input name="setlist" autofocus required
+           placeholder="https://www.setlist.fm/…  or  6b756686">
+  </label>
+  <label>Playlist name <span style="font-weight:400">(optional)</span>
+    <input name="name" placeholder="auto-generated from the show">
+  </label>
+  <button type="submit">Preview</button>
+</form>
+<p class="hint">Matches the show against your Plex library and shows what it
+found — nothing is created until you confirm.</p>
+{% endblock %}

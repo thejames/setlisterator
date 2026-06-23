@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — setlist → plex{% endblock %}
+{% block content %}
+<h2 class="err">{{ title }}</h2>
+<p>{{ message }}</p>
+<p><a href="{{ url_for('index') }}">← back</a></p>
+{% endblock %}

@@ -73,6 +73,26 @@ interactive, or skips with a hint to pass `--force` when run non-interactively
 recorded — a show that matched nothing is retried next time. The history lives
 outside the repo, so it won't be committed.
 
+## Web interface
+
+A small local web UI wraps the same matching pipeline:
+
+```bash
+./.venv/bin/pip install -r requirements.txt   # pulls in Flask
+./.venv/bin/python web.py                      # http://127.0.0.1:5000
+```
+
+Paste a setlist URL or ID and hit **Preview** — it matches the show against
+your library and shows the matched / missing / fuzzy report *without* creating
+anything. Review it (and tweak the playlist name if you like), then click
+**Create playlist** to commit. Create rebuilds the previewed tracks by their
+Plex rating keys, so nothing is re-matched, and the run is recorded in the same
+[history](#processed-setlist-history) the CLI uses.
+
+> **Local only.** The app talks to your local Plex server and holds your Plex
+> token, so it binds to `127.0.0.1` and has no authentication. Don't expose it
+> to a network.
+
 ## How matching works
 
 Each setlist song is matched to a Plex track in two stages:

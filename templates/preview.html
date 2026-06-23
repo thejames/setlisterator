@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Preview — setlist → plex{% endblock %}
+{% block content %}
+<p class="show">{{ result.show.artist }} — {{ result.show.venue }},
+  {{ result.show.city }} ({{ result.show.date }})</p>
+{% if result.show.url %}
+  <p><a href="{{ result.show.url }}" target="_blank" rel="noopener">setlist.fm source ↗</a></p>
+{% endif %}
+
+{% if prior %}
+  <p class="warn">⚠ Already created on {{ prior.processed_at }} as
+    “{{ prior.playlist_name }}”. Creating again makes another playlist.</p>
+{% endif %}
+
+<p class="counts">
+  <span class="ok">✓ {{ result.matched|length }} matched</span>
+  <span class="miss">✗ {{ result.missing|length }} missing</span>
+  <span class="fz">~ {{ result.fuzzy|length }} fuzzy</span>
+</p>
+
+<form method="post" action="{{ url_for('create') }}">
+  <input type="hidden" name="rating_keys" value="{{ rating_keys }}">
+  <input type="hidden" name="setlist_id" value="{{ result.setlist_id }}">
+  <input type="hidden" name="url" value="{{ result.show.url }}">
+  <input type="hidden" name="artist" value="{{ result.show.artist }}">
+  <input type="hidden" name="date" value="{{ result.show.date }}">
+  <input type="hidden" name="missing_json" value="{{ missing_json }}">
+  <input type="hidden" name="fuzzy_json" value="{{ fuzzy_json }}">
+  <label>Playlist name
+    <input name="name" value="{{ result.playlist_name }}" required>
+  </label>
+  <button type="submit">Create playlist ({{ result.matched|length }} tracks)</button>
+</form>
+
+{% if result.matched %}
+<h2>Matched ({{ result.matched|length }})</h2>
+<table>
+  <tr><th>#</th><th>Setlist song</th><th>Plex track</th><th>Match</th></tr>
+  {% for m in result.matched %}
+  <tr class="{{ 'fuzzy' if m.quality == 'fuzzy' else 'exact' }}">
+    <td>{{ m.position }}</td>
+    <td>{{ m.title }}</td>
+    <td>{{ m.track_artist }} — {{ m.track_title }}</td>
+    <td>{{ m.tier }}/{{ m.source }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if result.missing %}
+<h2 class="miss">Missing ({{ result.missing|length }}) — go buy these</h2>
+<ol>
+  {% for pos, artist, title in result.missing %}
+  <li>{{ artist }} - {{ title }}</li>
+  {% endfor %}
+</ol>
+{% endif %}
+
+{% if result.fuzzy %}
+<h2 class="fz">Fuzzy ({{ result.fuzzy|length }}) — spot-check for false positives</h2>
+<ul>
+  {% for pos, want, got in result.fuzzy %}
+  <li>{{ want }} &nbsp;→&nbsp; {{ got }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endblock %}
