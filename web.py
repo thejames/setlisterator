@@ -104,8 +104,11 @@ def create():
     except core.PlexError as exc:
         return _error("Plex problem", str(exc))
 
+    # Dedupe to match what create_playlist actually adds (e.g. a medley track
+    # chosen for two songs lands in the playlist once).
+    added = len(dict.fromkeys(rating_keys))
     return render_template("created.html", name=final_name,
-                           added=len(rating_keys), missing=missing)
+                           added=added, missing=missing)
 
 
 if __name__ == "__main__":

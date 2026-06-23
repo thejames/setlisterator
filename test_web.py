@@ -176,3 +176,16 @@ def test_create_builds_playlist(client, monkeypatch):
 def test_create_requires_keys(client):
     resp = client.post("/create", data={"name": "X"})  # no "pick" values
     assert resp.status_code == 400
+
+
+def test_create_added_count_is_deduped(client, monkeypatch):
+    # Two songs resolving to the same track (e.g. a medley) -> counted once.
+    monkeypatch.setattr(core, "create_playlist",
+                        lambda cfg, name, keys, meta: name)
+    resp = client.post("/create", data={
+        "name": "Show", "setlist_id": "abc",
+        "pick": ["10", "10", "21"],   # 10 chosen twice
+        "missing_json": "[]", "fuzzy_json": "[]",
+    })
+    body = resp.data.decode()
+    assert "2 tracks added" in body   # deduped: {10, 21}, not 3
