@@ -1,7 +1,23 @@
-# setlist_to_plex
+# Setlist-er-ator
 
 Create a Plex music playlist from a [setlist.fm](https://www.setlist.fm/) show,
 and report which songs are missing from your library so you know what to buy.
+Works as a command-line tool (`setlist_to_plex.py`) or a small local
+[web app](#web-interface) (`web.py`).
+
+## Stack
+
+- **Python 3** — CLI + core matching pipeline (`setlist_to_plex.py`)
+- **[plexapi](https://github.com/pkkid/python-plexapi)** — Plex library search
+  and playlist creation
+- **[requests](https://requests.readthedocs.io/)** — setlist.fm REST API
+- **[python-dotenv](https://github.com/theskumar/python-dotenv)** — `.env` config
+- **[Flask](https://flask.palletsprojects.com/)** + Jinja templates — the local
+  web UI (`web.py`, `templates/`); no JS build step
+- **pytest** — tests (`test_setlist_to_plex.py`, `test_web.py`), Plex/network-free
+
+Persistence is a single JSON history file (no database); there's no hosted
+component — it talks to Plex on `localhost`.
 
 ## Install
 
