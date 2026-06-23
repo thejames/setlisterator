@@ -477,6 +477,10 @@ def test_gather_matches_builds_structure(monkeypatch):
     assert result["matched"][0]["album"] == "Junta"
     assert result["matched"][0]["candidates"][0]["rating_key"] == 10
     assert result["missing"] == [(3, "Phish", "Some Rarity")]
+    # songs is the full setlist in order, missing rows flagged matched=False
+    assert [(s["position"], s["matched"]) for s in result["songs"]] == [
+        (1, True), (2, True), (3, False)]
+    assert result["songs"][2]["title"] == "Some Rarity"
 
 
 def test_gather_matches_attaches_multiple_candidates(monkeypatch):

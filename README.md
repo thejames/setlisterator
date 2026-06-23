@@ -86,9 +86,10 @@ A small local web UI wraps the same matching pipeline:
 ```
 
 Paste a setlist URL or ID and hit **Preview** — it matches the show against
-your library and shows the matched / missing / fuzzy report *without* creating
-anything. When a song matches more than one library track (e.g. the same song
-on a studio album, a live record, and a compilation) the matched row shows a
+your library and shows the **full setlist in order** *without* creating
+anything; songs not in your library are flagged inline (and also listed
+separately below). When a song matches more than one library track (e.g. the
+same song on a studio album, a live record, and a compilation) its row shows a
 **dropdown** so you can pick the version — by album — you want; the best match
 is preselected. Review it (and tweak the playlist name if you like), then click
 **Create playlist** to commit. Create rebuilds the chosen tracks by their Plex

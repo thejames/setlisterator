@@ -21,14 +21,8 @@ def client(monkeypatch):
 
 
 def _preview_result():
-    return {
-        "setlist_id": "abc123",
-        "show": {"artist": "Primus", "venue": "TD Amp", "city": "Charlotte",
-                 "date": "2026-06-16", "url": "https://setlist.fm/x.html"},
-        "playlist_name": "Primus - TD Amp, Charlotte (2026-06-16)",
-        "matched": [
-            # single candidate -> rendered as a hidden "pick" input
-            {"position": 1, "title": "Tommy the Cat",
+    # single candidate -> rendered as a hidden "pick" input
+    tommy = {"position": 1, "title": "Tommy the Cat",
              "track_title": "Tommy the Cat", "track_artist": "Primus",
              "album": "Sailing the Seas of Cheese", "rating_key": 10,
              "tier": "exact", "source": "scoped", "quality": "exact",
@@ -36,9 +30,9 @@ def _preview_result():
                  {"rating_key": 10, "track_title": "Tommy the Cat",
                   "track_artist": "Primus",
                   "album": "Sailing the Seas of Cheese",
-                  "tier": "exact", "source": "scoped", "quality": "exact"}]},
-            # two candidates -> rendered as a <select name="pick">
-            {"position": 2, "title": "Jerry Was a Race Car Driver",
+                  "tier": "exact", "source": "scoped", "quality": "exact"}]}
+    # two candidates -> rendered as a <select name="pick">
+    jerry = {"position": 2, "title": "Jerry Was a Race Car Driver",
              "track_title": "Jerry Was a Race Car Driver", "track_artist": "Primus",
              "album": "Sailing the Seas of Cheese", "rating_key": 20,
              "tier": "exact", "source": "scoped", "quality": "exact",
@@ -48,11 +42,23 @@ def _preview_result():
                   "tier": "exact", "source": "scoped", "quality": "exact"},
                  {"rating_key": 21, "track_title": "Jerry Was a Race Car Driver",
                   "track_artist": "Primus", "album": "Suck on This (Live)",
-                  "tier": "exact", "source": "scoped", "quality": "exact"}]},
-        ],
+                  "tier": "exact", "source": "scoped", "quality": "exact"}]}
+    return {
+        "setlist_id": "abc123",
+        "show": {"artist": "Primus", "venue": "TD Amp", "city": "Charlotte",
+                 "date": "2026-06-16", "url": "https://setlist.fm/x.html"},
+        "playlist_name": "Primus - TD Amp, Charlotte (2026-06-16)",
+        "matched": [tommy, jerry],
         "missing": [(3, "Primus", "Jilly's on Smack")],
         "fuzzy": [(2, "Primus - Hello Skinny",
                    "Primus - Hello Skinny / Constantinople")],
+        # full setlist in order: both matched songs plus the missing one inline
+        "songs": [
+            {**tommy, "matched": True},
+            {**jerry, "matched": True},
+            {"position": 3, "title": "Jilly's on Smack", "matched": False,
+             "artist": "Primus"},
+        ],
     }
 
 
@@ -85,6 +91,12 @@ def test_preview_renders_matches(client, monkeypatch):
     assert '<select name="pick">' in body
     assert 'value="21"' in body                     # the alternate album option
     assert "Suck on This (Live)" in body            # alternate album shown
+    # the missing song is shown inline in the full-setlist table...
+    assert "not in your library" in body
+    assert 'class="missing"' in body
+    # ...with no pick input for it (only the two matched songs contribute)
+    assert body.count('name="pick"') == 2
+    assert "go buy these" not in body               # label removed
 
 
 def test_preview_requires_input(client):

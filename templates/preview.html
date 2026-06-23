@@ -33,20 +33,28 @@
   </label>
   <button type="submit">Create playlist ({{ result.matched|length }} tracks)</button>
 
-  {% if result.matched %}
-  <h2>Matched ({{ result.matched|length }})</h2>
-  <p class="hint">Songs with more than one library match show a dropdown —
-    pick the version (album) you want before creating.</p>
+  {% if result.songs %}
+  <h2>Setlist ({{ result.songs|length }} songs · {{ result.matched|length }} in library)</h2>
+  <p class="hint">The full show in order. Songs with more than one library match
+    show a dropdown — pick the version (album) you want before creating.</p>
   <table>
     <tr><th>#</th><th>Setlist song</th><th>Plex track</th><th>Match</th></tr>
-    {% for m in result.matched %}
-    <tr class="{{ 'fuzzy' if m.quality == 'fuzzy' else 'exact' }}">
-      <td>{{ m.position }}</td>
-      <td>{{ m.title }}</td>
+    {% for s in result.songs %}
+    {% if not s.matched %}
+    <tr class="missing">
+      <td>{{ s.position }}</td>
+      <td>{{ s.title }}</td>
+      <td class="miss">— not in your library</td>
+      <td class="miss">missing</td>
+    </tr>
+    {% else %}
+    <tr class="{{ 'fuzzy' if s.quality == 'fuzzy' else 'exact' }}">
+      <td>{{ s.position }}</td>
+      <td>{{ s.title }}</td>
       <td>
-        {% if m.candidates|length > 1 %}
+        {% if s.candidates|length > 1 %}
         <select name="pick">
-          {% for c in m.candidates %}
+          {% for c in s.candidates %}
           <option value="{{ c.rating_key }}">
             {{ c.track_artist }} — {{ c.track_title }}{% if c.album %} · {{ c.album }}{% endif %}
             [{{ c.tier }}/{{ c.source }}]
@@ -54,20 +62,21 @@
           {% endfor %}
         </select>
         {% else %}
-        {{ m.track_artist }} — {{ m.track_title }}{% if m.album %} · {{ m.album }}{% endif %}
-        <input type="hidden" name="pick" value="{{ m.rating_key }}">
+        {{ s.track_artist }} — {{ s.track_title }}{% if s.album %} · {{ s.album }}{% endif %}
+        <input type="hidden" name="pick" value="{{ s.rating_key }}">
         {% endif %}
       </td>
-      <td>{{ m.tier }}/{{ m.source }}{% if m.candidates|length > 1 %}
-        <span class="hint">+{{ m.candidates|length - 1 }}</span>{% endif %}</td>
+      <td>{{ s.tier }}/{{ s.source }}{% if s.candidates|length > 1 %}
+        <span class="hint">+{{ s.candidates|length - 1 }}</span>{% endif %}</td>
     </tr>
+    {% endif %}
     {% endfor %}
   </table>
   {% endif %}
 </form>
 
 {% if result.missing %}
-<h2 class="miss">Missing ({{ result.missing|length }}) — go buy these</h2>
+<h2 class="miss">Missing ({{ result.missing|length }})</h2>
 <ol>
   {% for pos, artist, title in result.missing %}
   <li>{{ artist }} - {{ title }}</li>

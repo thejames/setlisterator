@@ -619,11 +619,14 @@ def gather_matches(config, setlist_id, name=None):
     matched = []
     missing = []
     fuzzy = []
+    songs = []   # the full setlist in order, each row flagged matched or not
     for position, title in enumerate(show["songs"], start=1):
         candidates = match_candidates(section, title, show["artist"],
                                       artist_tracks)
         if not candidates:
             missing.append((position, show["artist"], title))
+            songs.append({"position": position, "title": title,
+                          "matched": False, "artist": show["artist"]})
             logger.info("  ✗ %2d. %s → no match", position, title)
             continue
         best = candidates[0]
@@ -642,11 +645,13 @@ def gather_matches(config, setlist_id, name=None):
                  "candidates": [_describe(c) for c in candidates]}
         entry.update(_describe(best))  # default fields mirror the best candidate
         matched.append(entry)
+        songs.append({**entry, "matched": True})
 
     return {
         "setlist_id": setlist_id,
         "show": show,
         "playlist_name": playlist_name,
+        "songs": songs,
         "matched": matched,
         "missing": missing,
         "fuzzy": fuzzy,
