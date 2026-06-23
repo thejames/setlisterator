@@ -5,6 +5,57 @@ and report which songs are missing from your library so you know what to buy.
 Works as a command-line tool (`setlist_to_plex.py`) or a small local
 [web app](#web-interface) (`web.py`).
 
+## Quickstart (macOS)
+
+These steps assume macOS with [Homebrew](https://brew.sh). (Other platforms
+aren't documented here.)
+
+1. **Install Python and git** (skip whatever you already have):
+
+   ```bash
+   brew install python git
+   ```
+
+2. **Get the code and install dependencies:**
+
+   ```bash
+   git clone https://github.com/thejames/setlisterator.git
+   cd setlisterator
+   python3 -m venv .venv
+   ./.venv/bin/pip install -r requirements.txt
+   ```
+
+3. **Grab your credentials:**
+   - **setlist.fm API key** — request one (free) at <https://api.setlist.fm/docs/>.
+   - **Plex token** — follow Plex's
+     [Finding an authentication token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/).
+
+4. **Configure** — copy the example and fill in the four values:
+
+   ```bash
+   cp .env.example .env
+   # edit .env: SETLISTFM_API_KEY, PLEX_BASEURL, PLEX_TOKEN
+   # (and PLEX_MUSIC_LIBRARY if your music section isn't named "Music")
+   ```
+
+5. **Run the web app:**
+
+   ```bash
+   ./.venv/bin/python web.py
+   ```
+
+   Open <http://127.0.0.1:5000>, paste a setlist.fm URL, hit **Preview**, pick
+   track versions where you're offered a choice, then **Create playlist**. The
+   **History** link in the navbar lists shows you've already made.
+
+   Prefer the terminal? Use the CLI instead:
+
+   ```bash
+   ./.venv/bin/python setlist_to_plex.py "https://www.setlist.fm/…"
+   ```
+
+More detail on configuration, flags, and matching behavior is below.
+
 ## Stack
 
 - **Python 3** — CLI + core matching pipeline (`setlist_to_plex.py`)
@@ -18,13 +69,6 @@ Works as a command-line tool (`setlist_to_plex.py`) or a small local
 
 Persistence is a single JSON history file (no database); there's no hosted
 component — it talks to Plex on `localhost`.
-
-## Install
-
-```bash
-python3 -m venv .venv
-./.venv/bin/pip install -r requirements.txt
-```
 
 ## Configure
 
