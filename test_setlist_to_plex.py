@@ -1,0 +1,273 @@
+"""Unit tests for the pure logic in setlist_to_plex.
+
+These cover URL/ID parsing, title/artist normalization, setlist flattening,
+playlist-name generation, and the unique-name suffixing — i.e. everything that
+doesn't require a live Plex server or setlist.fm key. Run with: pytest
+"""
+
+import pytest
+
+import setlist_to_plex as m
+
+
+# ---------------------------------------------------------------------------
+# parse_setlist_id
+# ---------------------------------------------------------------------------
+
+def test_parse_bare_id():
+    assert m.parse_setlist_id("63de4613") == "63de4613"
+
+
+def test_parse_bare_id_strips_whitespace():
+    assert m.parse_setlist_id("  63de4613  ") == "63de4613"
+
+
+def test_parse_full_url():
+    url = ("https://www.setlist.fm/setlist/phish/2023/"
+           "madison-square-garden-new-york-ny-63de4613.html")
+    assert m.parse_setlist_id(url) == "63de4613"
+
+
+def test_parse_http_url_without_setlistfm_host():
+    # Anything starting with http is treated as a URL and must contain an id.
+    url = "http://example.com/whatever-7a3f10bc.html"
+    assert m.parse_setlist_id(url) == "7a3f10bc"
+
+
+def test_parse_url_without_id_raises():
+    with pytest.raises(ValueError):
+        m.parse_setlist_id("https://www.setlist.fm/setlist/no-id-here.htm")
+
+
+# ---------------------------------------------------------------------------
+# normalization
+# ---------------------------------------------------------------------------
+
+def test_normalize_simple_strips_punctuation_and_case():
+    assert m.normalize_simple("Run Like an Antelope!!!") == "run like an antelope"
+
+
+def test_normalize_simple_collapses_whitespace():
+    assert m.normalize_simple("  Down   with   Disease ") == "down with disease"
+
+
+def test_normalize_simple_empty():
+    assert m.normalize_simple("") == ""
+    assert m.normalize_simple(None) == ""
+
+
+def test_aggressive_drops_parenthetical():
+    assert m.normalize_aggressive("Tweezer (Reprise)") == "tweezer"
+
+
+def test_aggressive_drops_brackets():
+    assert m.normalize_aggressive("Sand [Remastered 2020]") == "sand"
+
+
+def test_aggressive_drops_featured_artist():
+    assert m.normalize_aggressive("Song feat. Trey") == "song"
+    assert m.normalize_aggressive("Song ft Mike") == "song"
+    assert m.normalize_aggressive("Song featuring Page") == "song"
+
+
+def test_aggressive_drops_leading_article():
+    assert m.normalize_aggressive("The Lizards") == "lizards"
+
+
+def test_aggressive_pt_equals_part():
+    assert m.normalize_aggressive("Wilson, Pt. 2") == m.normalize_aggressive("Wilson Part 2")
+
+
+def test_aggressive_and_equals_ampersand():
+    assert m.normalize_aggressive("Punch You in the Eye and More") == \
+        m.normalize_aggressive("Punch You in the Eye & More")
+
+
+# ---------------------------------------------------------------------------
+# artists_match
+# ---------------------------------------------------------------------------
+
+def test_artists_match_case_insensitive():
+    assert m.artists_match("Phish", "phish")
+
+
+def test_artists_match_ignores_leading_the():
+    assert m.artists_match("The Beatles", "Beatles")
+
+
+def test_artists_match_rejects_different():
+    assert not m.artists_match("Phish", "Goose")
+
+
+# ---------------------------------------------------------------------------
+# extract_show
+# ---------------------------------------------------------------------------
+
+def _sample_setlist():
+    return {
+        "artist": {"name": "Phish"},
+        "venue": {"name": "MSG", "city": {"name": "New York"}},
+        "eventDate": "31-12-2023",
+        "url": "https://www.setlist.fm/setlist/phish/2023/msg-abc123.html",
+        "sets": {"set": [
+            {"song": [
+                {"name": "Walk-in music", "tape": True},
+                {"name": "Wilson"},
+                {"name": "  "},
+            ]},
+            {"encore": 1, "song": [{"name": "Tweezer Reprise"}]},
+        ]},
+    }
+
+
+def test_extract_show_fields():
+    show = m.extract_show(_sample_setlist())
+    assert show["artist"] == "Phish"
+    assert show["venue"] == "MSG"
+    assert show["city"] == "New York"
+    assert show["date"] == "2023-12-31"  # reformatted from DD-MM-YYYY to ISO
+    assert show["url"] == "https://www.setlist.fm/setlist/phish/2023/msg-abc123.html"
+
+
+def test_extract_show_date_passthrough_when_unparseable():
+    show = m.extract_show({"eventDate": "sometime in 1995"})
+    assert show["date"] == "sometime in 1995"
+
+
+def test_extract_show_flattens_and_skips_tape_and_empty():
+    show = m.extract_show(_sample_setlist())
+    assert show["songs"] == ["Wilson", "Tweezer Reprise"]
+
+
+def test_extract_show_tolerates_bare_set_key():
+    data = {
+        "artist": {"name": "Goose"},
+        "venue": {"name": "Cap", "city": {"name": "Port Chester"}},
+        "eventDate": "01-01-2024",
+        "set": [{"song": [{"name": "Arrow"}]}],
+    }
+    show = m.extract_show(data)
+    assert show["songs"] == ["Arrow"]
+
+
+def test_extract_show_handles_missing_fields():
+    show = m.extract_show({})
+    assert show["artist"] == "Unknown Artist"
+    assert show["venue"] == "Unknown Venue"
+    assert show["city"] == "Unknown City"
+    assert show["date"] == ""
+    assert show["url"] == ""
+    assert show["songs"] == []
+
+
+def test_build_playlist_name():
+    show = m.extract_show(_sample_setlist())
+    assert m.build_playlist_name(show) == "Phish - MSG, New York (2023-12-31)"
+
+
+# ---------------------------------------------------------------------------
+# unique_playlist_name (uses a tiny stub instead of a live server)
+# ---------------------------------------------------------------------------
+
+class _FakePlaylist:
+    def __init__(self, title):
+        self.title = title
+
+
+class _FakePlex:
+    def __init__(self, titles):
+        self._titles = titles
+
+    def playlists(self):
+        return [_FakePlaylist(t) for t in self._titles]
+
+
+def test_unique_name_no_collision():
+    plex = _FakePlex(["Other"])
+    assert m.unique_playlist_name(plex, "My Show") == "My Show"
+
+
+def test_unique_name_single_collision():
+    plex = _FakePlex(["My Show"])
+    assert m.unique_playlist_name(plex, "My Show") == "My Show (2)"
+
+
+def test_unique_name_multiple_collisions():
+    plex = _FakePlex(["My Show", "My Show (2)", "My Show (3)"])
+    assert m.unique_playlist_name(plex, "My Show") == "My Show (4)"
+
+
+class _TitlelessTag:
+    """Stand-in for the titleless plexapi Tag object that /playlists can
+    yield on some servers (see unique_playlist_name)."""
+    def __getattr__(self, name):
+        if name == "title":
+            raise AttributeError("'Tag' object has no attribute 'title'")
+        raise AttributeError(name)
+
+
+def test_unique_name_ignores_titleless_objects():
+    # A stray titleless object must not crash collision detection.
+    plex = _FakePlex(["My Show"])
+    plex._titles = None  # bypass the title-based stub below
+    plex.playlists = lambda: [_FakePlaylist("My Show"), _TitlelessTag()]
+    assert m.unique_playlist_name(plex, "My Show") == "My Show (2)"
+
+
+# ---------------------------------------------------------------------------
+# match_song ranking (stubbed library section + tracks)
+# ---------------------------------------------------------------------------
+
+class _FakeTrack:
+    def __init__(self, title, artist):
+        self.title = title
+        self.grandparentTitle = artist
+        self.originalTitle = None
+
+
+class _FakeSection:
+    """Returns a fixed candidate list regardless of query."""
+
+    def __init__(self, tracks):
+        self._tracks = tracks
+
+    def searchTracks(self, title=None, maxresults=None):
+        return list(self._tracks)
+
+
+def test_match_song_prefers_exact_artist_and_title():
+    section = _FakeSection([
+        _FakeTrack("Wilson", "Ween"),       # title match, wrong artist
+        _FakeTrack("Wilson", "Phish"),      # exact
+    ])
+    track, quality = m.match_song(section, "Wilson", "Phish")
+    assert quality == "exact"
+    assert track.grandparentTitle == "Phish"
+
+
+def test_match_song_exact_ignores_parenthetical_punctuation():
+    # Parens are punctuation, so simple normalization makes these identical.
+    section = _FakeSection([_FakeTrack("Tweezer (Reprise)", "Phish")])
+    track, quality = m.match_song(section, "Tweezer Reprise", "Phish")
+    assert quality == "exact"
+    assert track is not None
+
+
+def test_match_song_fuzzy_on_abbreviation():
+    # "Pt. 2" vs "Part 2" differ under simple norm, match under aggressive.
+    section = _FakeSection([_FakeTrack("Wilson, Pt. 2", "Phish")])
+    track, quality = m.match_song(section, "Wilson Part 2", "Phish")
+    assert quality == "fuzzy"
+    assert track is not None
+
+
+def test_match_song_fuzzy_when_artist_differs():
+    section = _FakeSection([_FakeTrack("Loving Cup", "The Rolling Stones")])
+    track, quality = m.match_song(section, "Loving Cup", "Phish")
+    assert quality == "fuzzy"
+
+
+def test_match_song_returns_none_when_no_match():
+    section = _FakeSection([_FakeTrack("Totally Different", "Nobody")])
+    track, quality = m.match_song(section, "Wilson", "Phish")
+    assert track is None and quality is None
