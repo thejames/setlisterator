@@ -245,23 +245,87 @@ def _track_artist_name(track):
         getattr(track, "originalTitle", None) or ""
 
 
-def match_song(section, title, setlist_artist):
-    """Find the best Plex track for a setlist song.
+# Separators that join songs in a single library track (medleys).
+_MEDLEY_SPLIT = re.compile(r"\s*(?:/|→|>|;)\s*")
 
-    Returns (track, quality) where quality is 'exact', 'fuzzy', or None.
-    'exact'  -> artist matches and simple-normalized titles are identical.
-    'fuzzy'  -> matched only after looser normalization, or artist differs.
-    None     -> no acceptable match found.
+
+def _split_medley(title):
+    """Split a medley title into its component songs."""
+    return [part for part in _MEDLEY_SPLIT.split(title) if part.strip()]
+
+
+def _title_rank(target_simple, target_aggr, cand_title):
+    """Compare a candidate track title to the target song.
+
+    Returns a rank (lower is better) or None for no match:
+        0  simple-normalized titles are identical            -> 'exact'
+        1  aggressive-normalized titles match (parens/feat.) -> 'fuzzy'
+        2  a medley segment of the candidate matches         -> 'fuzzy'
+        3  candidate tokens start with the target's tokens   -> 'fuzzy'
     """
-    target_simple = normalize_simple(title)
-    target_aggr = normalize_aggressive(title)
+    if not target_simple:
+        return None
+    if normalize_simple(cand_title) == target_simple:
+        return 0
+    if target_aggr and normalize_aggressive(cand_title) == target_aggr:
+        return 1
+    # Medley: "Hello Skinny / Constantinople" should match "Hello Skinny".
+    if target_aggr:
+        for segment in _split_medley(cand_title):
+            if normalize_aggressive(segment) == target_aggr:
+                return 2
+    # Token-prefix: candidate title leads with the full target title, e.g.
+    # "Tommy the Cat - Live". Require a multi-word target to avoid matching a
+    # short title against an unrelated longer one ("Bob" -> "Bobby Brown").
+    target_tokens = target_aggr.split()
+    if len(target_tokens) >= 2:
+        cand_tokens = normalize_aggressive(cand_title).split()
+        if cand_tokens[:len(target_tokens)] == target_tokens:
+            return 3
+    return None
 
-    candidates = []
+
+def _best_match(target_simple, target_aggr, tracks, setlist_artist, scoped):
+    """Return (overall_rank, track, quality) for the best track, or None.
+
+    When ``scoped`` is True the tracks are already known to be by the setlist
+    artist, so artist matching is assumed; otherwise it is checked per track
+    and artist mismatches are demoted below every artist-confirmed match.
+    """
+    best = None
+    for track in tracks:
+        title_rank = _title_rank(target_simple, target_aggr, track.title)
+        if title_rank is None:
+            continue
+        artist_ok = True if scoped else \
+            artists_match(_track_artist_name(track), setlist_artist)
+        overall = title_rank if artist_ok else title_rank + 4
+        quality = "exact" if (artist_ok and title_rank == 0) else "fuzzy"
+        if best is None or overall < best[0]:
+            best = (overall, track, quality)
+        if overall == 0:
+            break  # can't beat an exact artist+title hit
+    return best
+
+
+def resolve_artist(section, setlist_artist):
+    """Find the library Artist matching the setlist artist, or None."""
+    try:
+        candidates = section.searchArtists(title=setlist_artist, maxresults=10)
+    except Exception:
+        return None
+    for artist in candidates:
+        if artists_match(getattr(artist, "title", ""), setlist_artist):
+            return artist
+    return None
+
+
+def _search_candidates(section, title, target_aggr):
+    """Global track search (used as a fallback for covers / missing artist)."""
     try:
         candidates = section.searchTracks(title=title, maxresults=50)
     except Exception:
         candidates = []
-
     # Fallback: search on the aggressively-normalized title (drops parens/feat)
     # in case the raw title is too specific to hit the index.
     if not candidates and target_aggr and target_aggr != normalize_simple(title):
@@ -269,32 +333,31 @@ def match_song(section, title, setlist_artist):
             candidates = section.searchTracks(title=target_aggr, maxresults=50)
         except Exception:
             candidates = []
+    return candidates
 
-    best = None        # (rank, track, quality); lower rank is better
-    for track in candidates:
-        cand_simple = normalize_simple(track.title)
-        cand_aggr = normalize_aggressive(track.title)
-        artist_ok = artists_match(_track_artist_name(track), setlist_artist)
 
-        title_exact = cand_simple == target_simple and target_simple != ""
-        title_fuzzy = cand_aggr == target_aggr and target_aggr != ""
+def match_song(section, title, setlist_artist, artist_tracks):
+    """Find the best Plex track for a setlist song.
 
-        if artist_ok and title_exact:
-            rank, quality = 0, "exact"
-        elif artist_ok and title_fuzzy:
-            rank, quality = 1, "fuzzy"
-        elif title_exact:
-            rank, quality = 2, "fuzzy"   # title nails it but artist differs
-        elif title_fuzzy:
-            rank, quality = 3, "fuzzy"
-        else:
-            continue
+    Strategy: first match against ``artist_tracks`` (the setlist artist's own
+    tracks, fetched once) using local normalization — this sidesteps Plex's
+    search tokenizer, which can miss tracks over punctuation/Unicode quirks.
+    Only if that finds nothing do we fall back to a global title search, which
+    also covers songs performed as covers of other artists.
 
-        if best is None or rank < best[0]:
-            best = (rank, track, quality)
-        if rank == 0:
-            break  # can't do better than an exact artist+title hit
+    Returns (track, quality) where quality is 'exact', 'fuzzy', or None.
+    """
+    target_simple = normalize_simple(title)
+    target_aggr = normalize_aggressive(title)
 
+    scoped = _best_match(target_simple, target_aggr, artist_tracks,
+                         setlist_artist, scoped=True)
+    if scoped is not None:
+        return scoped[1], scoped[2]
+
+    candidates = _search_candidates(section, title, target_aggr)
+    best = _best_match(target_simple, target_aggr, candidates,
+                       setlist_artist, scoped=False)
     if best is None:
         return None, None
     return best[1], best[2]
@@ -412,19 +475,39 @@ def main(argv=None):
         print(str(exc), file=sys.stderr)
         return EXIT_PLEX
 
+    # Resolve the setlist artist once and pull their tracks for local matching.
+    artist = resolve_artist(section, show["artist"])
+    artist_tracks = []
+    if artist is not None:
+        try:
+            artist_tracks = artist.tracks()
+        except Exception:
+            artist_tracks = []
+        print(f"Library:  matching against {len(artist_tracks)} tracks by "
+              f"{artist.title}")
+    else:
+        print(f"Library:  '{show['artist']}' not found as an artist; "
+              "using global track search")
+
     # --- Match each song --------------------------------------------------
     matched_tracks = []
     missing = []
     fuzzy = []
+    seen_keys = set()
     for position, title in enumerate(show["songs"], start=1):
-        track, quality = match_song(section, title, show["artist"])
+        track, quality = match_song(section, title, show["artist"], artist_tracks)
         if track is None:
             missing.append((position, show["artist"], title))
             continue
-        matched_tracks.append(track)
         if quality == "fuzzy":
             got = f"{_track_artist_name(track)} - {track.title}"
             fuzzy.append((position, f"{show['artist']} - {title}", got))
+        # Dedupe: a medley track can match more than one setlist song.
+        key = getattr(track, "ratingKey", None) or id(track)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        matched_tracks.append(track)
 
     if not matched_tracks:
         print_report(playlist_name, 0, missing, fuzzy)

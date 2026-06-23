@@ -219,55 +219,136 @@ def test_unique_name_ignores_titleless_objects():
 # ---------------------------------------------------------------------------
 
 class _FakeTrack:
-    def __init__(self, title, artist):
+    def __init__(self, title, artist, rating_key=None):
         self.title = title
         self.grandparentTitle = artist
         self.originalTitle = None
+        self.ratingKey = rating_key
+
+
+class _FakeArtist:
+    def __init__(self, title, tracks=()):
+        self.title = title
+        self._tracks = list(tracks)
+
+    def tracks(self):
+        return list(self._tracks)
 
 
 class _FakeSection:
-    """Returns a fixed candidate list regardless of query."""
+    """Stub library section for the global-search fallback path."""
 
-    def __init__(self, tracks):
-        self._tracks = tracks
+    def __init__(self, tracks=(), artists=()):
+        self._tracks = list(tracks)
+        self._artists = list(artists)
 
     def searchTracks(self, title=None, maxresults=None):
         return list(self._tracks)
 
+    def searchArtists(self, title=None, maxresults=None):
+        return list(self._artists)
+
+
+# --- global-fallback path (no artist_tracks) -------------------------------
 
 def test_match_song_prefers_exact_artist_and_title():
     section = _FakeSection([
         _FakeTrack("Wilson", "Ween"),       # title match, wrong artist
         _FakeTrack("Wilson", "Phish"),      # exact
     ])
-    track, quality = m.match_song(section, "Wilson", "Phish")
+    track, quality = m.match_song(section, "Wilson", "Phish", [])
     assert quality == "exact"
     assert track.grandparentTitle == "Phish"
 
 
 def test_match_song_exact_ignores_parenthetical_punctuation():
-    # Parens are punctuation, so simple normalization makes these identical.
     section = _FakeSection([_FakeTrack("Tweezer (Reprise)", "Phish")])
-    track, quality = m.match_song(section, "Tweezer Reprise", "Phish")
+    track, quality = m.match_song(section, "Tweezer Reprise", "Phish", [])
     assert quality == "exact"
     assert track is not None
 
 
 def test_match_song_fuzzy_on_abbreviation():
-    # "Pt. 2" vs "Part 2" differ under simple norm, match under aggressive.
     section = _FakeSection([_FakeTrack("Wilson, Pt. 2", "Phish")])
-    track, quality = m.match_song(section, "Wilson Part 2", "Phish")
+    track, quality = m.match_song(section, "Wilson Part 2", "Phish", [])
     assert quality == "fuzzy"
     assert track is not None
 
 
 def test_match_song_fuzzy_when_artist_differs():
     section = _FakeSection([_FakeTrack("Loving Cup", "The Rolling Stones")])
-    track, quality = m.match_song(section, "Loving Cup", "Phish")
+    track, quality = m.match_song(section, "Loving Cup", "Phish", [])
     assert quality == "fuzzy"
 
 
 def test_match_song_returns_none_when_no_match():
     section = _FakeSection([_FakeTrack("Totally Different", "Nobody")])
-    track, quality = m.match_song(section, "Wilson", "Phish")
+    track, quality = m.match_song(section, "Wilson", "Phish", [])
     assert track is None and quality is None
+
+
+# --- artist-scoped path (Part A) -------------------------------------------
+
+def test_scoped_match_survives_unicode_hyphen():
+    # Real bug #1: setlist sends ASCII '-' (U+002D); library has '‐' (U+2010).
+    # Plex search misses it, but local scoped matching normalizes both away.
+    library = [_FakeTrack("Those Damned Blue‐Collar Tweekers", "Primus")]
+    section = _FakeSection()  # global search returns nothing
+    track, quality = m.match_song(
+        section, "Those Damned Blue-Collar Tweekers", "Primus", library)
+    assert quality == "exact"
+    assert track is not None
+
+
+def test_scoped_match_handles_medley_segment():
+    # Real bug #7: library track is a medley; setlist lists one song of it.
+    library = [_FakeTrack("Hello Skinny / Constantinople", "Primus")]
+    section = _FakeSection()
+    track, quality = m.match_song(section, "Hello Skinny", "Primus", library)
+    assert quality == "fuzzy"
+    assert track is not None
+
+
+def test_scoped_match_handles_trailing_words():
+    library = [_FakeTrack("Tommy the Cat - Live in Charlotte", "Primus")]
+    section = _FakeSection()
+    track, quality = m.match_song(section, "Tommy the Cat", "Primus", library)
+    assert quality == "fuzzy"
+
+
+def test_prefix_tier_requires_multiword_target():
+    # A single-word target must not prefix-match an unrelated longer title.
+    library = [_FakeTrack("Bobby Brown Stomp", "Primus")]
+    section = _FakeSection()
+    track, quality = m.match_song(section, "Bob", "Primus", library)
+    assert track is None and quality is None
+
+
+def test_scoped_exact_beats_global():
+    # Scoped match wins even when a global search would also hit.
+    library = [_FakeTrack("Tommy the Cat", "Primus", rating_key=1)]
+    section = _FakeSection([_FakeTrack("Tommy the Cat", "Someone Else")])
+    track, quality = m.match_song(section, "Tommy the Cat", "Primus", library)
+    assert quality == "exact"
+    assert track.ratingKey == 1
+
+
+# --- resolve_artist --------------------------------------------------------
+
+def test_resolve_artist_found():
+    section = _FakeSection(artists=[_FakeArtist("Goose"), _FakeArtist("Primus")])
+    artist = m.resolve_artist(section, "primus")
+    assert artist is not None and artist.title == "Primus"
+
+
+def test_resolve_artist_not_found():
+    section = _FakeSection(artists=[_FakeArtist("Goose")])
+    assert m.resolve_artist(section, "Primus") is None
+
+
+# --- medley splitting ------------------------------------------------------
+
+def test_split_medley_variants():
+    assert m._split_medley("A / B") == ["A", "B"]
+    assert m._split_medley("A > B ; C") == ["A", "B", "C"]
+    assert m._split_medley("Single Song") == ["Single Song"]
