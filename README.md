@@ -1,5 +1,7 @@
 # Setlist-er-ator
 
+[![tests](https://github.com/thejames/setlisterator/actions/workflows/tests.yml/badge.svg)](https://github.com/thejames/setlisterator/actions/workflows/tests.yml)
+
 Create a Plex music playlist from a [setlist.fm](https://www.setlist.fm/) show,
 and report which songs are missing from your library so you know what to buy.
 Works as a command-line tool (`setlist_to_plex.py`) or a small local
