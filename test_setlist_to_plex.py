@@ -415,6 +415,42 @@ def test_should_process_tty_prompts_no():
     assert answered is False
 
 
+# --- print_history / --history flag ----------------------------------------
+
+def test_print_history_empty(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "none.json")
+    m.print_history()
+    assert "No history yet" in capsys.readouterr().out
+
+
+def test_print_history_lists_newest_first(monkeypatch, tmp_path, capsys):
+    hist = tmp_path / "history.json"
+    m.save_history(hist, {
+        "a": {"artist": "Phish", "date": "2023-12-31", "playlist_name": "MSG",
+              "processed_at": "2026-06-20", "matched": 21, "missing": 0},
+        "b": {"artist": "Primus", "date": "2026-06-16", "playlist_name": "TD Amp",
+              "processed_at": "2026-06-23", "matched": 8, "missing": 4},
+    })
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.print_history()
+    out = capsys.readouterr().out
+    assert "Phish" in out and "Primus" in out
+    assert out.index("Primus") < out.index("Phish")   # newest first
+    assert "4 missing" in out
+
+
+def test_main_history_flag_needs_no_config(monkeypatch, tmp_path, capsys):
+    # --history works with no setlist and no Plex/setlist.fm config.
+    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "none.json")
+    assert m.main(["--history"]) == m.EXIT_OK
+    assert "No history yet" in capsys.readouterr().out
+
+
+def test_main_requires_setlist_or_history():
+    with pytest.raises(SystemExit):   # argparse error -> exit
+        m.main([])
+
+
 # ---------------------------------------------------------------------------
 # Core pipeline: load_config / gather_matches / create_playlist
 # ---------------------------------------------------------------------------

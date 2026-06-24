@@ -118,9 +118,13 @@ failing.
 | Flag           | Effect                                                       |
 | -------------- | ------------------------------------------------------------ |
 | `--name NAME`  | override the auto-generated playlist name                    |
+| `--history`    | list previously created playlists (newest first) and exit    |
 | `--quiet`      | suppress per-song match logging on stderr                    |
 | `--force`      | re-process a setlist even if it was processed before         |
 | `--no-history` | don't read or write the processed-setlist history            |
+
+`--history` reads only the local history file, so it works without any Plex or
+setlist.fm configuration: `setlist_to_plex.py --history`.
 
 ## Logging vs. report
 

@@ -34,6 +34,9 @@ Example usage:
 
     # Re-process a setlist you've already done
     python setlist_to_plex.py 63de4613 --force
+
+    # List previously created playlists (no config needed)
+    python setlist_to_plex.py --history
 """
 
 import argparse
@@ -530,6 +533,25 @@ def should_process(history, setlist_id, force, is_tty, prompt_fn=input):
 # Reporting
 # ---------------------------------------------------------------------------
 
+def print_history():
+    """Print previously created playlists, newest first, from the history file."""
+    entries = list(load_history(history_path()).values())
+    if not entries:
+        print("No history yet — create a playlist and it'll show up here.")
+        return
+    entries.sort(key=lambda e: e.get("processed_at", ""), reverse=True)
+    print(f"History ({len(entries)}):")
+    for e in entries:
+        when = e.get("processed_at", "?")
+        artist = e.get("artist", "Unknown")
+        date = e.get("date", "?")
+        name = e.get("playlist_name", "—")
+        counts = f"{e.get('matched', 0)} added"
+        if e.get("missing"):
+            counts += f" · {e.get('missing')} missing"
+        print(f"  {when}  {artist} ({date})  \"{name}\"  [{counts}]")
+
+
 def print_report(playlist_name, added_count, missing, fuzzy):
     """Print the human-readable summary."""
     print()
@@ -726,9 +748,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Create a Plex playlist from a setlist.fm show.")
     parser.add_argument(
-        "setlist", help="setlist.fm setlist ID or full setlist URL")
+        "setlist", nargs="?",
+        help="setlist.fm setlist ID or full setlist URL")
     parser.add_argument(
         "--name", help="override the auto-generated playlist name")
+    parser.add_argument(
+        "--history", action="store_true",
+        help="list previously created playlists and exit")
     parser.add_argument(
         "--quiet", action="store_true",
         help="suppress per-song match logging on stderr")
@@ -743,6 +769,14 @@ def main(argv=None):
     logging.basicConfig(
         level=logging.WARNING if args.quiet else logging.INFO,
         format="%(message)s", stream=sys.stderr)
+
+    # --history just reads the local file — no setlist or Plex config needed.
+    if args.history:
+        print_history()
+        return EXIT_OK
+
+    if not args.setlist:
+        parser.error("a setlist ID or URL is required (or use --history)")
 
     try:
         config = load_config()
