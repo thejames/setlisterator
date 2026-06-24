@@ -15,7 +15,7 @@ network. It reuses the core pipeline from setlist_to_plex.py:
 
 import json
 
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, render_template, request
 
 import setlist_to_plex as core
 
@@ -63,6 +63,34 @@ def buylist():
                    key=lambda r: (-r["shows"], r["artist"].lower(),
                                   r["title"].lower()))
     return render_template("buylist.html", items=items)
+
+
+@app.get("/search")
+def search():
+    """Search the Plex music library by title; returns JSON for the override UI."""
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify(results=[])
+    try:
+        config = core.load_config()
+    except core.ConfigError as exc:
+        return jsonify(error=str(exc)), 400
+    try:
+        plex = core.connect_plex(config["plex_baseurl"], config["plex_token"])
+        section = core.get_music_section(plex, config["music_library"])
+        tracks = section.searchTracks(title=q, maxresults=25)
+    except (PermissionError, ConnectionError, LookupError) as exc:
+        return jsonify(error=str(exc)), 502
+    except Exception as exc:  # any other Plex hiccup
+        return jsonify(error=f"Search failed: {exc}"), 502
+
+    results = [{
+        "rating_key": getattr(t, "ratingKey", None),
+        "title": t.title,
+        "artist": core._track_artist_name(t),
+        "album": core._track_album(t),
+    } for t in tracks]
+    return jsonify(results=results)
 
 
 @app.post("/preview")

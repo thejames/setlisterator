@@ -47,11 +47,21 @@
     {% for s in result.songs %}
     {% if not s.matched %}
     <tr class="missing">
-      <td></td>
+      <td><input type="checkbox" name="include" value="{{ s.position }}" class="inc" disabled hidden></td>
       <td>{{ s.position }}</td>
       <td>{{ s.title }}</td>
-      <td class="miss">— not in your library</td>
-      <td class="miss">missing</td>
+      <td>
+        <input type="hidden" name="pick_{{ s.position }}" class="pick" value="" disabled>
+        <span class="chosen"></span>
+        <span class="searcher">
+          <span class="miss">— not in your library.</span>
+          <input type="search" class="q" value="{{ s.title }}"
+                 placeholder="search your library…" aria-label="Search library">
+          <button type="button" class="go">Search</button>
+        </span>
+        <div class="results"></div>
+      </td>
+      <td class="miss matchcell">missing</td>
     </tr>
     {% else %}
     <tr class="{{ 'fuzzy' if s.quality == 'fuzzy' else 'exact' }}">
@@ -99,4 +109,6 @@
   {% endfor %}
 </ul>
 {% endif %}
+
+<script src="{{ url_for('static', filename='app.js') }}" defer></script>
 {% endblock %}

@@ -145,10 +145,9 @@ def test_preview_renders_matches(client, monkeypatch):
     assert '<select name="pick_2">' in body
     assert 'value="21"' in body                     # the alternate album option
     assert "Suck on This (Live)" in body            # alternate album shown
-    # each matched row has an include checkbox (checked); missing row has none
+    # each matched row has an include checkbox, checked by default
     assert 'name="include" value="1" checked' in body
     assert 'name="include" value="2" checked' in body
-    assert body.count('name="include"') == 2
     # the missing song is shown inline in the full-setlist table...
     assert "not in your library" in body
     assert 'class="missing"' in body
@@ -158,6 +157,69 @@ def test_preview_renders_matches(client, monkeypatch):
 def test_preview_requires_input(client):
     resp = client.post("/preview", data={"setlist": ""})
     assert resp.status_code == 400
+
+
+def test_preview_missing_row_has_search_ui(client, monkeypatch):
+    monkeypatch.setattr(core, "gather_matches",
+                        lambda cfg, sid, name=None: _preview_result())
+    monkeypatch.setattr(core, "load_history", lambda path: {})
+    body = client.post("/preview", data={"setlist": "abc"}).data.decode()
+    # the missing row gets a search box + disabled pick/include the JS fills
+    assert 'class="q"' in body
+    assert 'name="pick_3"' in body
+    assert 'name="include" value="3" class="inc" disabled hidden' in body
+    assert "app.js" in body                      # script is wired in
+
+
+# --- /search (manual override JSON endpoint) -------------------------------
+
+class _Track:
+    def __init__(self, title, artist, album, key):
+        self.title = title
+        self.grandparentTitle = artist
+        self.parentTitle = album
+        self.ratingKey = key
+        self.originalTitle = None
+
+
+class _Section:
+    def __init__(self, tracks):
+        self._tracks = tracks
+
+    def searchTracks(self, title=None, maxresults=None):
+        return list(self._tracks)
+
+
+def test_search_returns_json(client, monkeypatch):
+    section = _Section([_Track("Jilly's on Smack", "Primus", "Pork Soda", 77)])
+    monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
+    monkeypatch.setattr(core, "get_music_section", lambda plex, lib: section)
+    data = client.get("/search?q=jilly").get_json()
+    assert data["results"][0] == {
+        "rating_key": 77, "title": "Jilly's on Smack",
+        "artist": "Primus", "album": "Pork Soda"}
+
+
+def test_search_empty_query(client):
+    assert client.get("/search?q=").get_json() == {"results": []}
+
+
+def test_search_config_error(client, monkeypatch):
+    def boom():
+        raise core.ConfigError("Missing required environment variable(s): X")
+    monkeypatch.setattr(core, "load_config", boom)
+    resp = client.get("/search?q=x")
+    assert resp.status_code == 400
+    assert "error" in resp.get_json()
+
+
+def test_search_plex_error(client, monkeypatch):
+    def boom(u, t):
+        raise ConnectionError("Could not reach Plex")
+    monkeypatch.setattr(core, "connect_plex", boom)
+    resp = client.get("/search?q=x")
+    assert resp.status_code == 502
+    assert "error" in resp.get_json()
 
 
 def test_preview_disables_create_when_no_matches(client, monkeypatch):
