@@ -2,8 +2,11 @@
 """Local web interface for setlist_to_plex.
 
 Run:
-    ./.venv/bin/python web.py        # serves http://127.0.0.1:5000
-    # or:  flask --app web run
+    ./.venv/bin/python web.py        # serves http://127.0.0.1:5001
+    PORT=8080 ./.venv/bin/python web.py   # or pick your own port
+
+Default port is 5001 (5000 is taken by AirPlay Receiver on macOS); override
+with the PORT environment variable.
 
 This app talks to your LOCAL Plex server and carries your Plex token, so it
 binds to 127.0.0.1 only and has no authentication. Do not expose it to a
@@ -14,6 +17,7 @@ network. It reuses the core pipeline from setlist_to_plex.py:
 """
 
 import json
+import os
 
 from flask import Flask, jsonify, render_template, request
 
@@ -170,4 +174,6 @@ def create():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    # 5000 is taken by AirPlay Receiver on macOS; default to 5001, allow PORT.
+    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5001")),
+            debug=False)

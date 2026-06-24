@@ -46,7 +46,7 @@ aren't documented here.)
    ./.venv/bin/python web.py
    ```
 
-   Open <http://127.0.0.1:5000>, paste a setlist.fm URL, hit **Preview**, pick
+   Open <http://127.0.0.1:5001>, paste a setlist.fm URL, hit **Preview**, pick
    track versions where you're offered a choice, then **Create playlist**. The
    **History** link in the navbar lists shows you've already made.
 
@@ -144,8 +144,11 @@ A small local web UI wraps the same matching pipeline:
 
 ```bash
 ./.venv/bin/pip install -r requirements.txt   # pulls in Flask
-./.venv/bin/python web.py                      # http://127.0.0.1:5000
+./.venv/bin/python web.py                      # http://127.0.0.1:5001
 ```
+
+> Default port is **5001** (macOS uses 5000 for AirPlay Receiver). Override with
+> `PORT=8080 ./.venv/bin/python web.py`.
 
 Paste a setlist URL or ID and hit **Preview** — it matches the show against
 your library and shows the **full setlist in order** *without* creating
