@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Buy list — Setlist-er-ator{% endblock %}
+{% block content %}
+<h2>Buy list ({{ items|length }})</h2>
+<p class="hint">Every track missing across the shows you've created, deduped —
+  your shopping list.</p>
+
+{% if items %}
+<table>
+  <tr><th>Artist</th><th>Title</th><th>Missing from</th></tr>
+  {% for it in items %}
+  <tr>
+    <td>{{ it.artist }}</td>
+    <td>{{ it.title }}</td>
+    <td>{{ it.shows }} show{{ '' if it.shows == 1 else 's' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>Nothing to buy — either you've matched everything, or you haven't
+  <a href="{{ url_for('index') }}">created any playlists</a> yet.</p>
+{% endif %}
+{% endblock %}

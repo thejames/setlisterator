@@ -707,6 +707,7 @@ def create_playlist(config, name, rating_keys, history_meta=None):
             "processed_at": datetime.now().isoformat(timespec="seconds"),
             "matched": len(tracks),
             "missing": history_meta.get("missing", 0),
+            "missing_tracks": history_meta.get("missing_tracks", []),
         }
         try:
             save_history(hist_file, history)
@@ -788,6 +789,8 @@ def main(argv=None):
         "artist": result["show"]["artist"],
         "date": result["show"]["date"],
         "missing": len(result["missing"]),
+        "missing_tracks": [{"artist": a, "title": t}
+                           for (_pos, a, t) in result["missing"]],
     }
     try:
         final_name = create_playlist(

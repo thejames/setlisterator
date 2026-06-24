@@ -562,7 +562,8 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     name = m.create_playlist(
         _CONFIG, "Phish - MSG", ["10", "11"],
         history_meta={"id": "abc123", "url": "u", "artist": "Phish",
-                      "date": "2023-12-31", "missing": 1})
+                      "date": "2023-12-31", "missing": 1,
+                      "missing_tracks": [{"artist": "Phish", "title": "Destiny Unbound"}]})
 
     assert name == "Phish - MSG"
     assert fake.created[0] == "Phish - MSG"
@@ -570,6 +571,8 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     saved = m.load_history(hist)
     assert saved["abc123"]["playlist_name"] == "Phish - MSG"
     assert saved["abc123"]["matched"] == 2
+    assert saved["abc123"]["missing_tracks"] == [
+        {"artist": "Phish", "title": "Destiny Unbound"}]
 
 
 def test_create_playlist_no_history_when_meta_none(monkeypatch, tmp_path):

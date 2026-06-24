@@ -44,6 +44,27 @@ def history():
     return render_template("history.html", entries=entries)
 
 
+@app.get("/buylist")
+def buylist():
+    """Aggregate every show's missing tracks into one deduped buy-list."""
+    # No config needed — this only reads the local history file.
+    by_key = {}
+    for entry in core.load_history(core.history_path()).values():
+        for track in entry.get("missing_tracks", []):
+            artist = track.get("artist", "")
+            title = track.get("title", "")
+            key = core.normalize_aggressive(f"{artist} {title}")
+            if not key:
+                continue
+            row = by_key.setdefault(
+                key, {"artist": artist, "title": title, "shows": 0})
+            row["shows"] += 1
+    items = sorted(by_key.values(),
+                   key=lambda r: (-r["shows"], r["artist"].lower(),
+                                  r["title"].lower()))
+    return render_template("buylist.html", items=items)
+
+
 @app.post("/preview")
 def preview():
     """Match the setlist and show the result without creating anything."""
@@ -95,6 +116,9 @@ def create():
         "artist": request.form.get("artist", ""),
         "date": request.form.get("date", ""),
         "missing": len(missing),
+        # missing rows are [position, artist, title]; store the names.
+        "missing_tracks": [{"artist": row[1], "title": row[2]}
+                           for row in missing if len(row) >= 3],
     }
     try:
         config = core.load_config()
