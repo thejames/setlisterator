@@ -178,6 +178,11 @@ def _port():
     return int(os.environ.get("PORT", "5001"))
 
 
-if __name__ == "__main__":
+def main():
+    """Entry point for the `setlisterator-web` console script."""
     core.load_dotenv()   # pick up PORT (and the rest) from .env at startup
     app.run(host="127.0.0.1", port=_port(), debug=False)
+
+
+if __name__ == "__main__":
+    main()

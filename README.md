@@ -56,6 +56,17 @@ aren't documented here.)
    ./.venv/bin/python setlist_to_plex.py "https://www.setlist.fm/…"
    ```
 
+### Install as commands (optional)
+
+An editable install exposes two console commands and keeps the web app's
+templates working in place:
+
+```bash
+./.venv/bin/pip install -e .
+setlisterator "https://www.setlist.fm/…"   # the CLI
+setlisterator-web                           # the web app (http://127.0.0.1:5001)
+```
+
 More detail on configuration, flags, and matching behavior is below.
 
 ## Stack

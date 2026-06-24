@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "setlisterator"
+version = "2026.6.0"
+description = "Create a Plex playlist from a setlist.fm show, and report what's missing — CLI + local web app"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "James Zambon", email = "james@zambon.us" }]
+keywords = ["plex", "setlist-fm", "playlist", "music", "flask"]
+dependencies = [
+    "plexapi>=4.15.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+    "flask>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/thejames/setlisterator"
+
+[project.scripts]
+setlisterator = "setlist_to_plex:main"
+setlisterator-web = "web:main"
+
+# Flat layout: the two top-level modules plus the web app's template/static
+# files. Install editable (`pip install -e .`) so Flask finds templates/static
+# in place.
+[tool.setuptools]
+py-modules = ["setlist_to_plex", "web"]
