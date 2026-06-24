@@ -3,9 +3,13 @@
 {% block content %}
 
 {% if result.show.url %}
-<div class="hint" style="margin-bottom:18px">
-  <span class="mono" style="color:var(--faint)">SOURCE</span>
-  <a href="{{ result.show.url }}" target="_blank" rel="noopener">{{ result.show.url }} ↗</a>
+<div class="urlbar">
+  <span class="tag">URL</span>
+  <input value="{{ result.show.url }}" readonly aria-label="setlist.fm source URL">
+  <form method="post" action="{{ url_for('preview') }}" data-loading="Re-importing…">
+    <input type="hidden" name="setlist" value="{{ result.show.url }}">
+    <button type="submit">Re-import</button>
+  </form>
 </div>
 {% endif %}
 
@@ -24,13 +28,15 @@
   <input type="hidden" name="missing_json" value="{{ missing_json }}">
   <input type="hidden" name="fuzzy_json" value="{{ fuzzy_json }}">
 
-  <div class="label">Playlist name</div>
-  <input class="title-input" name="name" value="{{ result.playlist_name }}" required>
-  <div class="meta">
-    <span class="lead">{{ result.show.artist }}</span>
-    <span class="sep">│</span><span>{{ result.show.venue }}</span>
-    <span class="sep">│</span><span>{{ result.show.city }}</span>
-    <span class="sep">│</span><span class="mono">{{ result.show.date }}</span>
+  <div class="header-divider">
+    <div class="label">Playlist name</div>
+    <input class="title-input" name="name" value="{{ result.playlist_name }}" required>
+    <div class="meta">
+      <span class="lead">{{ result.show.artist }}</span>
+      <span class="sep">│</span><span>{{ result.show.venue }}</span>
+      <span class="sep">│</span><span>{{ result.show.city }}</span>
+      <span class="sep">│</span><span class="mono">{{ result.show.date }}</span>
+    </div>
   </div>
 
   <div class="chips">
@@ -55,38 +61,48 @@
       <tr class="{{ 'missing' if not s.matched else '' }}">
         <td style="text-align:center">
           {% if s.matched %}
-          <input type="checkbox" name="include" value="{{ s.position }}" class="inc" checked>
+          <label class="addbox">
+            <input type="checkbox" name="include" value="{{ s.position }}" class="inc" checked>
+            <span class="box">✓</span>
+          </label>
           {% else %}
-          <input type="checkbox" name="include" value="{{ s.position }}" class="inc" disabled hidden>
+          <span class="addbox"><span class="box" style="opacity:.4"></span></span>
           {% endif %}
         </td>
         <td class="num">{{ '%02d' % s.position }}</td>
         <td class="trunc">{{ s.title }}</td>
         <td>
           {% if not s.matched %}
-            <input type="hidden" name="pick_{{ s.position }}" class="pick" value="" disabled>
-            <span class="chosen"></span>
-            <div class="searcher">
-              <span class="hint" style="font-style:italic">No match in library.</span>
-              <div class="searchrow">
-                <input type="search" class="q" value="{{ s.title }}" placeholder="search your library…" aria-label="Search library">
-                <button type="button" class="go">Search</button>
+            <span class="hint" style="font-style:italic">No match in library</span>
+          {% elif s.candidates|length > 1 %}
+            <div class="dropdown" data-dd>
+              <input type="hidden" name="pick_{{ s.position }}" value="{{ s.candidates[0].rating_key }}">
+              <button type="button" class="dd-btn" data-dd-toggle>
+                <span class="dd-text">
+                  <span class="dd-title trunc" data-dd-title>{{ s.candidates[0].track_artist }} — {{ s.candidates[0].track_title }}</span>
+                  <span class="dd-sub trunc" data-dd-sub>{{ s.candidates[0].album }}{% if s.candidates[0].album %} · {% endif %}{{ s.candidates[0].tier }}/{{ s.candidates[0].source }}</span>
+                </span>
+                <span class="dd-caret">▾</span>
+              </button>
+              <div class="dd-menu" hidden>
+                {% for c in s.candidates %}
+                <button type="button" class="dd-opt{% if loop.first %} sel{% endif %}"
+                        data-key="{{ c.rating_key }}"
+                        data-title="{{ c.track_artist }} — {{ c.track_title }}"
+                        data-sub="{{ c.album }}{% if c.album %} · {% endif %}{{ c.tier }}/{{ c.source }}">
+                  <span class="dd-title trunc">{{ c.track_artist }} — {{ c.track_title }}</span>
+                  <span class="dd-sub trunc">{{ c.album }}{% if c.album %} · {% endif %}{{ c.tier }}/{{ c.source }}</span>
+                </button>
+                {% endfor %}
               </div>
             </div>
-            <div class="results"></div>
-          {% elif s.candidates|length > 1 %}
-            <select name="pick_{{ s.position }}">
-              {% for c in s.candidates %}
-              <option value="{{ c.rating_key }}">{{ c.track_artist }} — {{ c.track_title }}{% if c.album %} · {{ c.album }}{% endif %} [{{ c.tier }}/{{ c.source }}]</option>
-              {% endfor %}
-            </select>
           {% else %}
             <div class="trunc">{{ s.track_artist }} — {{ s.track_title }}</div>
             {% if s.album %}<div class="sub trunc">{{ s.album }}</div>{% endif %}
             <input type="hidden" name="pick_{{ s.position }}" value="{{ s.rating_key }}">
           {% endif %}
         </td>
-        <td style="text-align:right" class="matchcell">
+        <td style="text-align:right">
           {% if s.matched %}<span class="sub" style="margin-right:8px">{{ s.tier }}·{{ s.source }}</span>{% endif %}
           <span class="pill pill-{{ status }}">{% if status == 'multi' %}{{ s.candidates|length }} matches{% elif status == 'missing' %}Missing{% elif status == 'fuzzy' %}Fuzzy{% else %}Exact{% endif %}</span>
         </td>
@@ -96,16 +112,29 @@
   </div>
   {% endif %}
 
-  {% if result.fuzzy %}
+  {% set fuzzy_rows = result.matched | selectattr('quality', 'equalto', 'fuzzy') | list %}
+  {% if fuzzy_rows %}
   <div class="section-head">
     <span class="dot amber"></span><span class="t">Fuzzy matches</span>
-    <span class="s">spot-check for false positives</span>
+    <span class="s">need your confirmation</span>
   </div>
   <div class="cards">
-    {% for pos, want, got in result.fuzzy %}
-    <div class="card card-fuzzy">
-      <span class="num">{{ '%02d' % pos }}</span>
-      <span style="flex:1">{{ want }} <span class="hint">→</span> {{ got }}</span>
+    {% for f in fuzzy_rows %}
+    <div class="card card-fuzzy fuzzycard" data-fcard="{{ f.position }}">
+      <div style="min-width:0">
+        <div class="caplabel">From setlist</div>
+        <div class="trunc">{{ f.title }}</div>
+      </div>
+      <div class="arrow-mid">→</div>
+      <div style="min-width:0">
+        <div class="caplabel">Plex suggests</div>
+        <div class="trunc">{{ f.track_artist }} — {{ f.track_title }}</div>
+        <div class="sub trunc">{{ f.album }}{% if f.album %} · {% endif %}{{ f.tier }}/{{ f.source }}</div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" class="btn-sm btn-amber" data-accept="{{ f.position }}">Accept</button>
+        <button type="button" class="btn-sm" data-reject="{{ f.position }}">Reject</button>
+      </div>
     </div>
     {% endfor %}
   </div>
@@ -118,19 +147,33 @@
   </div>
   <div class="cards">
     {% for pos, artist, title in result.missing %}
-    <div class="card card-missing">
+    <div class="card card-missing missingcard" data-missing data-pos="{{ pos }}">
       <span class="num">{{ '%02d' % pos }}</span>
-      <span style="flex:1">{{ artist }} - {{ title }}</span>
+      <span class="trunc" style="flex:1">{{ artist }} - {{ title }}</span>
+      <input type="hidden" name="pick_{{ pos }}" class="pick" value="" disabled>
+      <input type="checkbox" name="include" value="{{ pos }}" class="inc" disabled hidden>
+      <span class="chosen"></span>
+      <div class="searcher" style="display:flex;align-items:center;gap:10px">
+        <div class="searchrow" style="margin:0;min-width:260px">
+          <input type="search" class="q" value="{{ title }}" placeholder="search Plex…" aria-label="Search library">
+          <button type="button" class="go">Search</button>
+        </div>
+        <button type="button" class="btn-sm skip" data-skip>Skip</button>
+      </div>
+      <div class="results"></div>
     </div>
     {% endfor %}
   </div>
   {% endif %}
 
+  <pre class="jsonview" data-jsonview hidden></pre>
+
   <div class="actionbar"><div class="inner">
-    <div class="count"><b data-selected>{{ result.matched|length }}</b><span>of {{ stats.total }} selected</span></div>
+    <div class="count"><b data-selected>{{ result.matched|length }}</b><span>tracks selected of {{ stats.total }}</span></div>
     <div class="grow"></div>
+    <button type="button" class="btn-ghost" data-json-toggle>Preview JSON</button>
     {% if result.matched %}
-    <button type="submit" class="btn-accent">▶ Create playlist</button>
+    <button type="submit" class="btn-accent">▶ Create Plex playlist · <span data-create-count>{{ result.matched|length }}</span> tracks</button>
     {% else %}
     <button type="submit" class="btn-accent" disabled>Nothing in your library to add</button>
     {% endif %}

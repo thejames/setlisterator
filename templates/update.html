@@ -28,17 +28,36 @@
       {% set status = 'multi' if s.candidates|length > 1 else s.quality %}
       <tr>
         <td style="text-align:center">
-          <input type="checkbox" name="include" value="{{ s.position }}" class="inc" checked>
+          <label class="addbox">
+            <input type="checkbox" name="include" value="{{ s.position }}" class="inc" checked>
+            <span class="box">✓</span>
+          </label>
         </td>
         <td class="num">{{ '%02d' % s.position }}</td>
         <td class="trunc">{{ s.title }}</td>
         <td>
           {% if s.candidates|length > 1 %}
-          <select name="pick_{{ s.position }}">
-            {% for c in s.candidates %}
-            <option value="{{ c.rating_key }}">{{ c.track_artist }} — {{ c.track_title }}{% if c.album %} · {{ c.album }}{% endif %} [{{ c.tier }}/{{ c.source }}]</option>
-            {% endfor %}
-          </select>
+          <div class="dropdown" data-dd>
+            <input type="hidden" name="pick_{{ s.position }}" value="{{ s.candidates[0].rating_key }}">
+            <button type="button" class="dd-btn" data-dd-toggle>
+              <span class="dd-text">
+                <span class="dd-title trunc" data-dd-title>{{ s.candidates[0].track_artist }} — {{ s.candidates[0].track_title }}</span>
+                <span class="dd-sub trunc" data-dd-sub>{{ s.candidates[0].album }}{% if s.candidates[0].album %} · {% endif %}{{ s.candidates[0].tier }}/{{ s.candidates[0].source }}</span>
+              </span>
+              <span class="dd-caret">▾</span>
+            </button>
+            <div class="dd-menu" hidden>
+              {% for c in s.candidates %}
+              <button type="button" class="dd-opt{% if loop.first %} sel{% endif %}"
+                      data-key="{{ c.rating_key }}"
+                      data-title="{{ c.track_artist }} — {{ c.track_title }}"
+                      data-sub="{{ c.album }}{% if c.album %} · {% endif %}{{ c.tier }}/{{ c.source }}">
+                <span class="dd-title trunc">{{ c.track_artist }} — {{ c.track_title }}</span>
+                <span class="dd-sub trunc">{{ c.album }}{% if c.album %} · {% endif %}{{ c.tier }}/{{ c.source }}</span>
+              </button>
+              {% endfor %}
+            </div>
+          </div>
           {% else %}
           <div class="trunc">{{ s.track_artist }} — {{ s.track_title }}</div>
           {% if s.album %}<div class="sub trunc">{{ s.album }}</div>{% endif %}

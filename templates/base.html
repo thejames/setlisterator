@@ -69,9 +69,10 @@
       cursor: pointer; }
     .title-input {
       width: 100%; max-width: none; margin: 0; padding: 0; background: transparent;
-      border: none; color: #fff; font-size: 32px; font-weight: 700;
+      border: none; color: #fff; font-size: 34px; font-weight: 700;
       letter-spacing: -.01em;
     }
+    .header-divider { border-top: 1px solid #1C1C22; padding-top: 26px; }
     select {
       font: inherit; padding: 8px 10px; max-width: 100%; color: var(--text);
       background: var(--panel3); border: 1px solid var(--border2); border-radius: 9px;
@@ -168,7 +169,70 @@
       color: #fff; }
     .actionbar .count span { font-size: 14px; color: var(--muted); margin-left: 8px; }
     .grow { flex: 1; }
+    .btn-ghost { background: transparent; border: none; color: var(--muted);
+      font-weight: 600; }
+    .btn-ghost:hover { color: var(--text); }
+    .jsonview { max-width: 1180px; margin: 0 auto 90px; padding: 16px 18px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      font-family: var(--mono); font-size: 12px; color: var(--text2);
+      white-space: pre-wrap; word-break: break-all; }
     ol, ul { padding-left: 1.4rem; }
+
+    /* Spec: URL bar in the top row */
+    .urlbar { display: flex; align-items: center; gap: 10px; flex: 1;
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+      padding: 9px 9px 9px 14px; margin-bottom: 24px; }
+    .urlbar .tag { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+    .urlbar input { flex: 1; min-width: 0; max-width: none; margin: 0; padding: 0;
+      background: transparent; border: none; color: #B9B9C0;
+      font-family: var(--mono); font-size: 13px; }
+    .urlbar form { margin: 0; }
+    .urlbar button { padding: 8px 16px; font-size: 13px; }
+
+    /* Spec: custom Add checkbox (native input hidden, label is the box) */
+    .addbox { display: inline-flex; cursor: pointer; }
+    .addbox .inc { position: absolute; opacity: 0; width: 0; height: 0; }
+    .addbox .box { width: 20px; height: 20px; border-radius: 6px; display: flex;
+      align-items: center; justify-content: center; transition: all .12s;
+      background: #16161B; border: 1px solid #3A3A44; color: #0F0F12;
+      font-size: 12px; font-weight: 800; line-height: 1; }
+    .addbox .inc:checked + .box { background: var(--accent); border-color: var(--accent); }
+    .addbox .inc:not(:checked) + .box { color: transparent; }
+    .addbox .inc:disabled + .box { background: var(--panel); border-color: #2A2A32;
+      opacity: .4; cursor: not-allowed; }
+
+    /* Spec: custom multi-match dropdown */
+    .dropdown { position: relative; }
+    .dd-btn { width: 100%; display: flex; align-items: center;
+      justify-content: space-between; gap: 8px; text-align: left;
+      background: var(--panel3); border: 1px solid var(--border2); border-radius: 9px;
+      padding: 7px 11px; }
+    .dd-btn.open { border-color: var(--blue); }
+    .dd-text { min-width: 0; flex: 1; }
+    .dd-title { display: block; font-size: 14px; color: var(--text); }
+    .dd-sub { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .dd-caret { color: var(--muted); font-size: 11px; flex: none; }
+    .dd-menu { position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 60;
+      background: #1B1B21; border: 1px solid var(--border2); border-radius: 10px;
+      box-shadow: 0 16px 40px rgba(0,0,0,.55); padding: 5px; }
+    .dd-opt { width: 100%; text-align: left; display: block; border: none;
+      background: transparent; border-radius: 7px; padding: 9px 10px; }
+    .dd-opt:hover, .dd-opt.sel { background: #23232B; }
+
+    /* Spec: richer Fuzzy / Missing section cards */
+    .fuzzycard { display: grid; grid-template-columns: 1fr 22px 1fr 150px;
+      align-items: center; gap: 18px; }
+    .fuzzycard.rejected { opacity: .45; }
+    .caplabel { font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--faint); margin-bottom: 4px; }
+    .arrow-mid { text-align: center; color: var(--faint); font-size: 16px; }
+    .btn-sm { font-size: 13px; padding: 8px 12px; }
+    .btn-amber { background: var(--accent); border: none; color: #0F0F12; font-weight: 700; }
+    .missingcard { flex-wrap: wrap; }
+    .missingcard .results { flex-basis: 100%; }
+    .missingcard.skipped { opacity: .4; }
+    .searchpill { display: flex; align-items: center; gap: 8px; min-width: 0;
+      background: #101014; border: 1px solid #2A2A32; border-radius: 8px; padding: 6px 12px; }
   </style>
 </head>
 <body>

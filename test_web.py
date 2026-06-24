@@ -233,10 +233,12 @@ def test_preview_renders_matches(client, monkeypatch):
     assert "Tommy the Cat" in body                 # matched
     assert "Sailing the Seas of Cheese" in body     # album surfaced
     assert "Jilly&#39;s on Smack" in body           # missing (HTML-escaped)
-    # per-position fields: single-candidate -> hidden input; multi -> <select>
+    # per-position fields: single-candidate -> hidden input; multi -> custom
+    # dropdown (hidden pick_N + options carrying each candidate's rating key)
     assert '<input type="hidden" name="pick_1" value="10">' in body
-    assert '<select name="pick_2">' in body
-    assert 'value="21"' in body                     # the alternate album option
+    assert 'name="pick_2"' in body
+    assert 'class="dropdown"' in body
+    assert 'data-key="21"' in body                  # the alternate album option
     assert "Suck on This (Live)" in body            # alternate album shown
     # each matched row has an include checkbox, checked by default
     assert 'name="include" value="1" class="inc" checked' in body
@@ -248,6 +250,10 @@ def test_preview_renders_matches(client, monkeypatch):
     # design: stat chips and the live selected count
     assert 'class="chip' in body
     assert "data-selected" in body
+    # spec elements: URL bar + Re-import, custom Add box, count-in-button
+    assert 'class="urlbar"' in body and "Re-import" in body
+    assert 'class="addbox"' in body
+    assert "data-create-count" in body
 
 
 def test_stats_counts_are_exclusive():
