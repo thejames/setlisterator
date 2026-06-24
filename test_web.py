@@ -125,12 +125,85 @@ def test_history_lists_entries_newest_first(client, monkeypatch):
     # Re-open posts the stored URL to the existing preview route
     assert 'name="setlist" value="https://setlist.fm/primus.html"' in body
     assert "4 missing" in body
+    assert 'action="/update-preview"' in body   # Update button present
 
 
 def test_history_empty(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {})
     body = client.get("/history").data.decode()
     assert "No history yet" in body
+
+
+# --- update flow -----------------------------------------------------------
+
+class _FakePL:
+    def __init__(self, title, key, item_keys):
+        self.title = title
+        self.ratingKey = key
+        self._items = [type("T", (), {"ratingKey": k})() for k in item_keys]
+
+    def items(self):
+        return list(self._items)
+
+
+def test_update_preview_shows_only_new(client, monkeypatch):
+    monkeypatch.setattr(core, "gather_matches",
+                        lambda c, s, n=None: _preview_result())
+    monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
+    # Tommy (rating_key 10) is already in the playlist; Jerry (20/21) is not.
+    pl = _FakePL("Primus - TD Amp", 999, [10])
+    monkeypatch.setattr(core, "find_playlist", lambda plex, **k: pl)
+    body = client.post("/update-preview", data={
+        "setlist": "abc", "playlist_rating_key": "999",
+        "name": "Primus - TD Amp"}).data.decode()
+    assert "Update" in body
+    assert 'name="pick_2"' in body        # Jerry is new -> offered
+    assert 'name="pick_1"' not in body    # Tommy already in playlist -> hidden
+    assert 'value="999"' in body          # playlist key carried forward
+
+
+def test_update_preview_nothing_new(client, monkeypatch):
+    monkeypatch.setattr(core, "gather_matches",
+                        lambda c, s, n=None: _preview_result())
+    monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
+    pl = _FakePL("Primus - TD Amp", 999, [10, 20])   # both already present
+    monkeypatch.setattr(core, "find_playlist", lambda plex, **k: pl)
+    body = client.post("/update-preview", data={
+        "setlist": "abc", "name": "Primus - TD Amp"}).data.decode()
+    assert "Nothing new" in body
+
+
+def test_update_preview_playlist_gone(client, monkeypatch):
+    monkeypatch.setattr(core, "gather_matches",
+                        lambda c, s, n=None: _preview_result())
+    monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
+    monkeypatch.setattr(core, "find_playlist", lambda plex, **k: None)
+    resp = client.post("/update-preview", data={"setlist": "abc", "name": "X"})
+    assert b"Playlist not found" in resp.data
+
+
+def test_update_adds_picked_tracks(client, monkeypatch):
+    captured = {}
+
+    def fake_add(cfg, key, name, keys, meta):
+        captured.update(key=key, name=name, keys=keys, meta=meta)
+        return name, len(keys)
+
+    monkeypatch.setattr(core, "add_to_playlist", fake_add)
+    resp = client.post("/update", data={
+        "name": "Primus - TD Amp", "playlist_rating_key": "999",
+        "setlist_id": "abc", "include": ["2"], "pick_2": "21",
+        "missing_json": "[]",
+    })
+    assert resp.status_code == 200
+    assert captured["keys"] == ["21"] and captured["key"] == "999"
+    body = resp.data.decode()
+    assert "Added 1 track" in body and "Primus - TD Amp" in body
+
+
+def test_update_requires_picks(client):
+    resp = client.post("/update", data={"name": "X", "playlist_rating_key": "1"})
+    assert resp.status_code == 400
 
 
 def test_index_config_error(client, monkeypatch):

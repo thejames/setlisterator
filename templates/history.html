@@ -22,6 +22,13 @@
         <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
         <button type="submit">Re-open</button>
       </form>
+      <form method="post" action="{{ url_for('update_preview') }}" style="margin:0"
+            data-loading="Checking…">
+        <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
+        <input type="hidden" name="playlist_rating_key" value="{{ e.get('playlist_rating_key', '') }}">
+        <input type="hidden" name="name" value="{{ e.get('playlist_name', '') }}">
+        <button type="submit">Update</button>
+      </form>
       {% if e.get("url") %}
       <a href="{{ e.url }}" target="_blank" rel="noopener">setlist.fm ↗</a>
       {% endif %}

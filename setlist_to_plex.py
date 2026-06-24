@@ -680,6 +680,34 @@ def gather_matches(config, setlist_id, name=None):
     }
 
 
+def _record_history(playlist_name, playlist_rating_key, matched_count,
+                    history_meta):
+    """Write/merge the history entry for a created or updated playlist."""
+    if not (history_meta and history_meta.get("id")):
+        return
+    setlist_id = history_meta["id"]
+    hist_file = history_path()
+    history = load_history(hist_file)
+    entry = history.get(setlist_id, {})
+    entry.update({
+        "id": setlist_id,
+        "url": history_meta.get("url", entry.get("url", "")),
+        "artist": history_meta.get("artist", entry.get("artist", "")),
+        "date": history_meta.get("date", entry.get("date", "")),
+        "playlist_name": playlist_name,
+        "playlist_rating_key": playlist_rating_key,
+        "processed_at": datetime.now().isoformat(timespec="seconds"),
+        "matched": matched_count,
+        "missing": history_meta.get("missing", 0),
+        "missing_tracks": history_meta.get("missing_tracks", []),
+    })
+    history[setlist_id] = entry
+    try:
+        save_history(hist_file, history)
+    except OSError as exc:
+        logger.warning("Could not write history at %s (%s).", hist_file, exc)
+
+
 def create_playlist(config, name, rating_keys, history_meta=None):
     """Create a Plex playlist from track rating keys and record history.
 
@@ -712,32 +740,81 @@ def create_playlist(config, name, rating_keys, history_meta=None):
 
     final_name = unique_playlist_name(plex, name)
     try:
-        plex.createPlaylist(final_name, items=tracks)
+        playlist = plex.createPlaylist(final_name, items=tracks)
     except plex_exceptions.PlexApiException as exc:
         raise PlexError(f"Failed to create playlist: {exc}") from exc
 
-    if history_meta is not None and history_meta.get("id"):
-        setlist_id = history_meta["id"]
-        hist_file = history_path()
-        history = load_history(hist_file)
-        history[setlist_id] = {
-            "id": setlist_id,
-            "url": history_meta.get("url", ""),
-            "artist": history_meta.get("artist", ""),
-            "date": history_meta.get("date", ""),
-            "playlist_name": final_name,
-            "processed_at": datetime.now().isoformat(timespec="seconds"),
-            "matched": len(tracks),
-            "missing": history_meta.get("missing", 0),
-            "missing_tracks": history_meta.get("missing_tracks", []),
-        }
-        try:
-            save_history(hist_file, history)
-        except OSError as exc:
-            logger.warning("Could not write history at %s (%s).",
-                           hist_file, exc)
-
+    _record_history(final_name, getattr(playlist, "ratingKey", None),
+                    len(tracks), history_meta)
     return final_name
+
+
+def find_playlist(plex, rating_key=None, name=None):
+    """Return a Plex Playlist by rating key (preferred) or exact title, or None.
+
+    Matches within plex.playlists() so it works regardless of how the playlist
+    is keyed, and tolerates the titleless objects that endpoint can yield.
+    """
+    try:
+        playlists = plex.playlists()
+    except Exception:
+        return None
+    if rating_key:
+        for pl in playlists:
+            if str(getattr(pl, "ratingKey", "")) == str(rating_key):
+                return pl
+    if name:
+        for pl in playlists:
+            if getattr(pl, "title", None) == name:
+                return pl
+    return None
+
+
+def add_to_playlist(config, rating_key, name, rating_keys, history_meta=None):
+    """Add tracks (by rating key) to an existing playlist; record history.
+
+    Add-only: skips keys already in the playlist (and dedupes). Returns
+    (playlist_title, added_count). Raises PlexError if the playlist is gone.
+    """
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    except (PermissionError, ConnectionError) as exc:
+        raise PlexError(str(exc)) from exc
+
+    playlist = find_playlist(plex, rating_key=rating_key, name=name)
+    if playlist is None:
+        raise PlexError("That playlist no longer exists in Plex — "
+                        "create a new one instead.")
+
+    existing = set()
+    try:
+        for item in playlist.items():
+            key = getattr(item, "ratingKey", None)
+            if key is not None:
+                existing.add(str(key))
+    except Exception:
+        pass
+
+    tracks = []
+    seen = set()
+    for key in rating_keys:
+        if str(key) in existing or str(key) in seen:
+            continue
+        seen.add(str(key))
+        try:
+            tracks.append(plex.fetchItem(int(key)))
+        except Exception:
+            logger.warning("Could not fetch track %s; skipping.", key)
+
+    if tracks:
+        try:
+            playlist.addItems(tracks)
+        except plex_exceptions.PlexApiException as exc:
+            raise PlexError(f"Failed to add tracks: {exc}") from exc
+
+    _record_history(playlist.title, getattr(playlist, "ratingKey", None),
+                    len(existing) + len(tracks), history_meta)
+    return playlist.title, len(tracks)
 
 
 # ---------------------------------------------------------------------------

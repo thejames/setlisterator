@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Updated — Setlist-er-ator{% endblock %}
+{% block content %}
+<p class="ok big">✓ Added {{ added }} track{{ '' if added == 1 else 's' }} to “{{ name }}”.</p>
+<p><a href="{{ url_for('history') }}">← back to history</a></p>
+{% endblock %}

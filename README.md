@@ -178,8 +178,13 @@ rating keys, so nothing is re-matched, and the run is recorded in the same
 [history](#processed-setlist-history) the CLI uses.
 
 The top navbar's **History** link opens a page listing every show you've
-created, newest first; each row re-opens that setlist in Preview or links out to
-its setlist.fm source.
+created, newest first. Each row can **Re-open** the setlist in Preview, link out
+to its setlist.fm source, or **Update** the existing playlist: it re-matches the
+show against your *current* library and shows the tracks that are now available
+but not yet in the playlist, for you to confirm. Update is **add-only** — it
+tops up the existing playlist (no new copy, nothing removed), so when you buy a
+song that was missing, you can fold it into the playlist you already made. The
+**Buy list** link aggregates every show's missing tracks into one deduped list.
 
 > **Local only.** The app talks to your local Plex server and holds your Plex
 > token, so it binds to `127.0.0.1` and has no authentication. Don't expose it

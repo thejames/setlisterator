@@ -7,7 +7,7 @@
 <h2 class="miss">Still missing ({{ missing|length }})</h2>
 <ol>
   {% for row in missing %}
-  <li>{{ row[1] }} - {{ row[2] }}</li>
+  <li>{{ row.artist }} - {{ row.title }}</li>
   {% endfor %}
 </ol>
 {% endif %}

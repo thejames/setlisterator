@@ -130,34 +130,13 @@ def create():
     """Build the Plex playlist from the previewed (matched) rating keys."""
     name = (request.form.get("name") or "").strip()
     setlist_id = (request.form.get("setlist_id") or "").strip()
-    # Each included row contributes pick_<position>; collect them in setlist
-    # (position) order. Unchecked rows are simply absent from "include".
-    included = {int(p) for p in request.form.getlist("include") if p.isdigit()}
-    rating_keys = []
-    for pos in sorted(included):
-        key = request.form.get(f"pick_{pos}")
-        if key:
-            rating_keys.append(key)
+    rating_keys = _picked_rating_keys()
     if not name:
         return _error("Missing name", "A playlist name is required.", 400)
     if not rating_keys:
         return _error("Nothing to create", "No matched tracks to add.", 400)
 
-    try:
-        missing = json.loads(request.form.get("missing_json") or "[]")
-    except ValueError:
-        missing = []
-
-    history_meta = {
-        "id": setlist_id,
-        "url": request.form.get("url", ""),
-        "artist": request.form.get("artist", ""),
-        "date": request.form.get("date", ""),
-        "missing": len(missing),
-        # missing rows are [position, artist, title]; store the names.
-        "missing_tracks": [{"artist": row[1], "title": row[2]}
-                           for row in missing if len(row) >= 3],
-    }
+    history_meta = _history_meta_from_form(setlist_id)
     try:
         config = core.load_config()
         final_name = core.create_playlist(config, name, rating_keys, history_meta)
@@ -169,8 +148,113 @@ def create():
     # Dedupe to match what create_playlist actually adds (e.g. a medley track
     # chosen for two songs lands in the playlist once).
     added = len(dict.fromkeys(rating_keys))
-    return render_template("created.html", name=final_name,
-                           added=added, missing=missing)
+    return render_template("created.html", name=final_name, added=added,
+                           missing=history_meta["missing_tracks"])
+
+
+def _picked_rating_keys():
+    """Collect included rows' pick_<position> values, in setlist order."""
+    included = {int(p) for p in request.form.getlist("include") if p.isdigit()}
+    keys = []
+    for pos in sorted(included):
+        key = request.form.get(f"pick_{pos}")
+        if key:
+            keys.append(key)
+    return keys
+
+
+def _history_meta_from_form(setlist_id):
+    """Build history_meta (incl. missing_tracks) from the hidden form fields."""
+    try:
+        missing = json.loads(request.form.get("missing_json") or "[]")
+    except ValueError:
+        missing = []
+    return {
+        "id": setlist_id,
+        "url": request.form.get("url", ""),
+        "artist": request.form.get("artist", ""),
+        "date": request.form.get("date", ""),
+        "missing": len(missing),
+        "missing_tracks": [{"artist": row[1], "title": row[2]}
+                           for row in missing if len(row) >= 3],
+    }
+
+
+@app.post("/update-preview")
+def update_preview():
+    """Re-match a past show and show which now-available tracks are NOT yet in
+    its existing playlist (the add-only diff), for confirmation."""
+    setlist_arg = (request.form.get("setlist") or "").strip()
+    playlist_key = (request.form.get("playlist_rating_key") or "").strip()
+    pl_name = (request.form.get("name") or "").strip()
+    if not setlist_arg:
+        return _error("Missing input", "No setlist to update from.", 400)
+
+    try:
+        config = core.load_config()
+        setlist_id = core.parse_setlist_id(setlist_arg)
+        result = core.gather_matches(config, setlist_id, None)
+        plex = core.connect_plex(config["plex_baseurl"], config["plex_token"])
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    except ValueError as exc:
+        return _error("Couldn't read that setlist", str(exc), 400)
+    except core.SetlistError as exc:
+        return _error("Setlist problem", str(exc))
+    except (PermissionError, ConnectionError, core.PlexError) as exc:
+        return _error("Plex problem", str(exc))
+
+    playlist = core.find_playlist(plex, rating_key=playlist_key or None,
+                                  name=pl_name or None)
+    if playlist is None:
+        return _error("Playlist not found",
+                      "That playlist no longer exists in Plex. Use Re-open to "
+                      "create a fresh one.")
+
+    existing = set()
+    try:
+        for item in playlist.items():
+            key = getattr(item, "ratingKey", None)
+            if key is not None:
+                existing.add(str(key))
+    except Exception:
+        pass
+
+    # New = matched songs with no candidate already in the playlist (any version).
+    new_songs = []
+    for song in result["matched"]:
+        cand_keys = {str(c.get("rating_key")) for c in song.get("candidates", [])}
+        if cand_keys & existing:
+            continue
+        new_songs.append(song)
+
+    return render_template(
+        "update.html", result=result, playlist=playlist, new_songs=new_songs,
+        playlist_rating_key=getattr(playlist, "ratingKey", "") or "",
+        missing_json=json.dumps(result["missing"]))
+
+
+@app.post("/update")
+def update():
+    """Add the chosen new tracks to the existing playlist (add-only)."""
+    name = (request.form.get("name") or "").strip()
+    playlist_key = (request.form.get("playlist_rating_key") or "").strip()
+    setlist_id = (request.form.get("setlist_id") or "").strip()
+    rating_keys = _picked_rating_keys()
+    if not rating_keys:
+        return _error("Nothing selected", "No tracks chosen to add.", 400)
+
+    try:
+        config = core.load_config()
+        title, added = core.add_to_playlist(
+            config, playlist_key or None, name, rating_keys,
+            _history_meta_from_form(setlist_id))
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    except core.PlexError as exc:
+        return _error("Plex problem", str(exc))
+
+    return render_template("updated.html", name=title, added=added)
 
 
 def _port():

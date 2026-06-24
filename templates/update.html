@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Update — Setlist-er-ator{% endblock %}
+{% block content %}
+<p class="show">Update “{{ playlist.title }}”</p>
+<p class="hint">Songs from this setlist that are now in your library but not yet
+  in the playlist. Add-only — nothing is removed.</p>
+
+{% if new_songs %}
+<form method="post" action="{{ url_for('update') }}" data-loading="Adding…">
+  <input type="hidden" name="setlist_id" value="{{ result.setlist_id }}">
+  <input type="hidden" name="playlist_rating_key" value="{{ playlist_rating_key }}">
+  <input type="hidden" name="name" value="{{ playlist.title }}">
+  <input type="hidden" name="url" value="{{ result.show.url }}">
+  <input type="hidden" name="artist" value="{{ result.show.artist }}">
+  <input type="hidden" name="date" value="{{ result.show.date }}">
+  <input type="hidden" name="missing_json" value="{{ missing_json }}">
+
+  <button type="submit">Add {{ new_songs|length }} track{{ '' if new_songs|length == 1 else 's' }} to the playlist</button>
+
+  <table>
+    <tr><th>Add?</th><th>#</th><th>Setlist song</th><th>Plex track</th><th>Match</th></tr>
+    {% for s in new_songs %}
+    <tr class="{{ 'fuzzy' if s.quality == 'fuzzy' else 'exact' }}">
+      <td><input type="checkbox" name="include" value="{{ s.position }}" checked></td>
+      <td>{{ s.position }}</td>
+      <td>{{ s.title }}</td>
+      <td>
+        {% if s.candidates|length > 1 %}
+        <select name="pick_{{ s.position }}">
+          {% for c in s.candidates %}
+          <option value="{{ c.rating_key }}">
+            {{ c.track_artist }} — {{ c.track_title }}{% if c.album %} · {{ c.album }}{% endif %}
+            [{{ c.tier }}/{{ c.source }}]
+          </option>
+          {% endfor %}
+        </select>
+        {% else %}
+        {{ s.track_artist }} — {{ s.track_title }}{% if s.album %} · {{ s.album }}{% endif %}
+        <input type="hidden" name="pick_{{ s.position }}" value="{{ s.rating_key }}">
+        {% endif %}
+      </td>
+      <td>{{ s.tier }}/{{ s.source }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</form>
+{% else %}
+<p class="ok">✓ Nothing new — “{{ playlist.title }}” already has everything from
+  this setlist that's in your library.</p>
+{% endif %}
+
+{% if result.missing %}
+<h2 class="miss">Still missing ({{ result.missing|length }})</h2>
+<ol>
+  {% for pos, artist, title in result.missing %}
+  <li>{{ artist }} - {{ title }}</li>
+  {% endfor %}
+</ol>
+{% endif %}
+{% endblock %}

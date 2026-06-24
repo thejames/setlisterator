@@ -574,19 +574,38 @@ def test_gather_matches_setlist_error_wraps(monkeypatch):
         m.gather_matches(_CONFIG, "abc123")
 
 
+class _FakePlaylistObj:
+    def __init__(self, title, rating_key, items=()):
+        self.title = title
+        self.ratingKey = rating_key
+        self.type = "playlist"
+        self._items = list(items)
+        self.added = []
+
+    def items(self):
+        return list(self._items)
+
+    def addItems(self, tracks):
+        self.added.extend(tracks)
+        self._items.extend(tracks)
+
+
 class _FakeCreatePlex:
-    def __init__(self):
+    def __init__(self, playlists=()):
         self.created = None
+        self._playlists = list(playlists)
 
     def fetchItem(self, key):
-        return _FakeTrack(f"track-{key}", "Phish", rating_key=key)
+        return _FakeTrack(f"track-{key}", "Phish", rating_key=int(key))
 
     def playlists(self):
-        return []
+        return list(self._playlists)
 
     def createPlaylist(self, title, items=None):
-        self.created = (title, list(items))
-        return object()
+        self.created = (title, list(items or []))
+        pl = _FakePlaylistObj(title, rating_key=999, items=list(items or []))
+        self._playlists.append(pl)
+        return pl
 
 
 def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
@@ -607,6 +626,7 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     saved = m.load_history(hist)
     assert saved["abc123"]["playlist_name"] == "Phish - MSG"
     assert saved["abc123"]["matched"] == 2
+    assert saved["abc123"]["playlist_rating_key"] == 999   # key stored for update
     assert saved["abc123"]["missing_tracks"] == [
         {"artist": "Phish", "title": "Destiny Unbound"}]
 
@@ -628,3 +648,41 @@ def test_create_playlist_skips_history_with_blank_id(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "history_path", lambda: hist)
     m.create_playlist(_CONFIG, "PL", ["1"], history_meta={"id": ""})
     assert not hist.exists()
+
+
+# --- find_playlist / add_to_playlist (update flow) -------------------------
+
+def test_find_playlist_by_key_then_name():
+    one = _FakePlaylistObj("One", 1)
+    two = _FakePlaylistObj("Two", 2)
+    plex = _FakeCreatePlex(playlists=[one, two])
+    assert m.find_playlist(plex, rating_key=2) is two
+    assert m.find_playlist(plex, name="One") is one
+    assert m.find_playlist(plex, rating_key=9, name="Two") is two   # key miss
+    assert m.find_playlist(plex, rating_key=9, name="Nope") is None
+
+
+def test_add_to_playlist_adds_only_new(monkeypatch, tmp_path):
+    pl = _FakePlaylistObj("My Show", 999,
+                          items=[_FakeTrack("A", "Phish", rating_key=10)])
+    plex = _FakeCreatePlex(playlists=[pl])
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: plex)
+    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "h.json")
+
+    title, added = m.add_to_playlist(
+        _CONFIG, 999, "My Show", ["10", "11", "11"],
+        history_meta={"id": "abc", "missing": 0, "missing_tracks": []})
+
+    assert title == "My Show"
+    assert added == 1                              # 10 present; 11 new; dup 11
+    assert [t.ratingKey for t in pl.added] == [11]
+    saved = m.load_history(tmp_path / "h.json")
+    assert saved["abc"]["matched"] == 2            # 1 existing + 1 added
+    assert saved["abc"]["playlist_rating_key"] == 999
+
+
+def test_add_to_playlist_missing_playlist_raises(monkeypatch):
+    plex = _FakeCreatePlex(playlists=[])           # nothing to find
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: plex)
+    with pytest.raises(m.PlexError):
+        m.add_to_playlist(_CONFIG, 999, "Gone", ["10"])
