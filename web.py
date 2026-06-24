@@ -98,8 +98,14 @@ def create():
     """Build the Plex playlist from the previewed (matched) rating keys."""
     name = (request.form.get("name") or "").strip()
     setlist_id = (request.form.get("setlist_id") or "").strip()
-    # One "pick" value per matched song, in setlist order (the chosen track).
-    rating_keys = [k for k in request.form.getlist("pick") if k]
+    # Each included row contributes pick_<position>; collect them in setlist
+    # (position) order. Unchecked rows are simply absent from "include".
+    included = {int(p) for p in request.form.getlist("include") if p.isdigit()}
+    rating_keys = []
+    for pos in sorted(included):
+        key = request.form.get(f"pick_{pos}")
+        if key:
+            rating_keys.append(key)
     if not name:
         return _error("Missing name", "A playlist name is required.", 400)
     if not rating_keys:

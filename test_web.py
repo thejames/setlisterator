@@ -140,16 +140,18 @@ def test_preview_renders_matches(client, monkeypatch):
     assert "Tommy the Cat" in body                 # matched
     assert "Sailing the Seas of Cheese" in body     # album surfaced
     assert "Jilly&#39;s on Smack" in body           # missing (HTML-escaped)
-    # single-candidate song -> hidden pick input; multi-candidate -> a <select>
-    assert '<input type="hidden" name="pick" value="10">' in body
-    assert '<select name="pick">' in body
+    # per-position fields: single-candidate -> hidden input; multi -> <select>
+    assert '<input type="hidden" name="pick_1" value="10">' in body
+    assert '<select name="pick_2">' in body
     assert 'value="21"' in body                     # the alternate album option
     assert "Suck on This (Live)" in body            # alternate album shown
+    # each matched row has an include checkbox (checked); missing row has none
+    assert 'name="include" value="1" checked' in body
+    assert 'name="include" value="2" checked' in body
+    assert body.count('name="include"') == 2
     # the missing song is shown inline in the full-setlist table...
     assert "not in your library" in body
     assert 'class="missing"' in body
-    # ...with no pick input for it (only the two matched songs contribute)
-    assert body.count('name="pick"') == 2
     assert "go buy these" not in body               # label removed
 
 
@@ -201,20 +203,38 @@ def test_create_builds_playlist(client, monkeypatch):
         "url": "https://setlist.fm/x.html",
         "artist": "Primus",
         "date": "2026-06-16",
-        "pick": ["10", "21"],   # second song: the alternate album was chosen
+        "include": ["1", "2"],
+        "pick_1": "10",
+        "pick_2": "21",          # second song: the alternate album was chosen
         "missing_json": '[[3, "Primus", "Jilly\'s on Smack"]]',
         "fuzzy_json": "[]",
     })
     assert resp.status_code == 200
-    assert captured["keys"] == ["10", "21"]   # picks honored in order
+    assert captured["keys"] == ["10", "21"]   # picks honored in position order
     assert captured["meta"]["missing"] == 1
     body = resp.data.decode()
     assert "Primus - TD Amp (2)" in body         # final (suffixed) name shown
     assert "Jilly&#39;s on Smack" in body        # buy-list persisted
 
 
+def test_create_excludes_unchecked_rows(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(core, "create_playlist",
+                        lambda cfg, name, keys, meta: captured.update(keys=keys)
+                        or name)
+    # Three matched rows, but row 2 is left out of "include".
+    resp = client.post("/create", data={
+        "name": "Show", "setlist_id": "abc",
+        "include": ["1", "3"],
+        "pick_1": "10", "pick_2": "20", "pick_3": "30",
+        "missing_json": "[]", "fuzzy_json": "[]",
+    })
+    assert resp.status_code == 200
+    assert captured["keys"] == ["10", "30"]   # row 2 excluded, order preserved
+
+
 def test_create_requires_keys(client):
-    resp = client.post("/create", data={"name": "X"})  # no "pick" values
+    resp = client.post("/create", data={"name": "X"})  # nothing included
     assert resp.status_code == 400
 
 
@@ -224,7 +244,8 @@ def test_create_added_count_is_deduped(client, monkeypatch):
                         lambda cfg, name, keys, meta: name)
     resp = client.post("/create", data={
         "name": "Show", "setlist_id": "abc",
-        "pick": ["10", "10", "21"],   # 10 chosen twice
+        "include": ["1", "2", "3"],
+        "pick_1": "10", "pick_2": "10", "pick_3": "21",   # 10 chosen twice
         "missing_json": "[]", "fuzzy_json": "[]",
     })
     body = resp.data.decode()

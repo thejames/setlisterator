@@ -39,13 +39,15 @@
 
   {% if result.songs %}
   <h2>Setlist ({{ result.songs|length }} songs · {{ result.matched|length }} in library)</h2>
-  <p class="hint">The full show in order. Songs with more than one library match
-    show a dropdown — pick the version (album) you want before creating.</p>
+  <p class="hint">The full show in order. Uncheck a row to leave it out. Songs
+    with more than one library match show a dropdown — pick the version (album)
+    you want before creating.</p>
   <table>
-    <tr><th>#</th><th>Setlist song</th><th>Plex track</th><th>Match</th></tr>
+    <tr><th>Add?</th><th>#</th><th>Setlist song</th><th>Plex track</th><th>Match</th></tr>
     {% for s in result.songs %}
     {% if not s.matched %}
     <tr class="missing">
+      <td></td>
       <td>{{ s.position }}</td>
       <td>{{ s.title }}</td>
       <td class="miss">— not in your library</td>
@@ -53,11 +55,12 @@
     </tr>
     {% else %}
     <tr class="{{ 'fuzzy' if s.quality == 'fuzzy' else 'exact' }}">
+      <td><input type="checkbox" name="include" value="{{ s.position }}" checked></td>
       <td>{{ s.position }}</td>
       <td>{{ s.title }}</td>
       <td>
         {% if s.candidates|length > 1 %}
-        <select name="pick">
+        <select name="pick_{{ s.position }}">
           {% for c in s.candidates %}
           <option value="{{ c.rating_key }}">
             {{ c.track_artist }} — {{ c.track_title }}{% if c.album %} · {{ c.album }}{% endif %}
@@ -67,7 +70,7 @@
         </select>
         {% else %}
         {{ s.track_artist }} — {{ s.track_title }}{% if s.album %} · {{ s.album }}{% endif %}
-        <input type="hidden" name="pick" value="{{ s.rating_key }}">
+        <input type="hidden" name="pick_{{ s.position }}" value="{{ s.rating_key }}">
         {% endif %}
       </td>
       <td>{{ s.tier }}/{{ s.source }}{% if s.candidates|length > 1 %}
