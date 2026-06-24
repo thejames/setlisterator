@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>setlisterator</Name>
+  <Repository>ghcr.io/thejames/setlisterator:latest</Repository>
+  <Registry>https://github.com/thejames/setlisterator/pkgs/container/setlisterator</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/thejames/setlisterator/issues</Support>
+  <Project>https://github.com/thejames/setlisterator</Project>
+  <Overview>Create a Plex music playlist from a setlist.fm show, and report which songs are missing from your library. Local web UI; talks to your Plex server on the LAN.</Overview>
+  <Category>MediaApp:Music</Category>
+  <WebUI>http://[IP]:[PORT:5001]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/thejames/setlisterator/main/unraid/setlisterator.xml</TemplateURL>
+  <ExtraParams/>
+  <PostArgs/>
+  <Config Name="WebUI Port" Target="5001" Default="5001" Mode="tcp" Description="Port for the web UI" Type="Port" Display="always" Required="true" Mask="false">5001</Config>
+  <Config Name="History (appdata)" Target="/data" Default="/mnt/user/appdata/setlisterator" Mode="rw" Description="Where history.json (and the album cache) is stored" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/setlisterator</Config>
+  <Config Name="SETLISTFM_API_KEY" Target="SETLISTFM_API_KEY" Default="" Description="setlist.fm API key (https://api.setlist.fm/docs/)" Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="PLEX_BASEURL" Target="PLEX_BASEURL" Default="http://YOUR_PLEX_IP:32400" Description="Plex server base URL, e.g. http://10.0.0.10:32400" Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="PLEX_TOKEN" Target="PLEX_TOKEN" Default="" Description="Plex X-Plex-Token" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="PLEX_MUSIC_LIBRARY" Target="PLEX_MUSIC_LIBRARY" Default="Music" Description="Name of your Plex music library section" Type="Variable" Display="always" Required="false" Mask="false">Music</Config>
+</Container>

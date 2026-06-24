@@ -218,6 +218,23 @@ published port by editing the `ports:` mapping in `docker-compose.yml`.
 > access, put it behind a tunnel (Tailscale, Cloudflare Tunnel) with
 > authentication — not included here.
 
+### Install on Unraid
+
+A multi-arch image is published to GHCR by CI on every push to `main`:
+`ghcr.io/thejames/setlisterator:latest` (and `:vX.Y.Z` for tags). To install:
+
+1. **Docker** → **Add Container**, and in *Template* paste the template URL:
+   `https://raw.githubusercontent.com/thejames/setlisterator/main/unraid/setlisterator.xml`
+   (or just set *Repository* to the image above and configure manually).
+2. Fill in `SETLISTFM_API_KEY`, `PLEX_BASEURL` (e.g. `http://10.0.0.10:32400`),
+   `PLEX_TOKEN`, and the music library; the appdata path maps to `/data` so
+   `history.json` persists.
+3. **Apply**, then open the WebUI on the mapped port (default `5001`).
+
+The image's GHCR package must be **Public** to pull without a login — after the
+first CI publish, set it in GitHub → repo **Packages** → *setlisterator* →
+*Package settings* → **Change visibility → Public** (one-time).
+
 ## How matching works
 
 Each setlist song is matched to a Plex track in two stages:
