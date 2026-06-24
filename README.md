@@ -83,6 +83,7 @@ Copy `.env.example` to `.env` and fill it in:
 | `PLEX_TOKEN`         | yes      | your Plex `X-Plex-Token`                          |
 | `PLEX_MUSIC_LIBRARY` | no       | library section name (default `Music`)           |
 | `SETLIST_TO_PLEX_HISTORY` | no  | history file path (default below)                |
+| `PORT`               | no       | web app port (default `5001`; web UI only)       |
 
 ## Usage
 

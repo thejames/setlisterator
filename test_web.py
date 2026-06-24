@@ -8,6 +8,7 @@ Plex, no setlist.fm.
 import pytest
 
 import setlist_to_plex as core
+import web
 from web import app
 
 
@@ -66,6 +67,13 @@ def test_index_ok(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert b"setlist.fm URL or ID" in resp.data
+
+
+def test_port_default_and_override(monkeypatch):
+    monkeypatch.delenv("PORT", raising=False)
+    assert web._port() == 5001
+    monkeypatch.setenv("PORT", "8080")
+    assert web._port() == 8080
 
 
 def test_navbar_present(client):

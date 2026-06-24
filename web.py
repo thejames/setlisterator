@@ -173,7 +173,11 @@ def create():
                            added=added, missing=missing)
 
 
+def _port():
+    """Web server port: PORT env/.env, else 5001 (5000 is AirPlay on macOS)."""
+    return int(os.environ.get("PORT", "5001"))
+
+
 if __name__ == "__main__":
-    # 5000 is taken by AirPlay Receiver on macOS; default to 5001, allow PORT.
-    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5001")),
-            debug=False)
+    core.load_dotenv()   # pick up PORT (and the rest) from .env at startup
+    app.run(host="127.0.0.1", port=_port(), debug=False)
