@@ -1,16 +1,26 @@
 {% extends "base.html" %}
 {% block title %}Created — Setlist-er-ator{% endblock %}
 {% block content %}
-<p class="ok big">✓ Created “{{ name }}” — {{ added }} track{{ '' if added == 1 else 's' }} added.</p>
+<div class="panel" style="max-width:480px;margin:30px auto;padding:34px 30px;text-align:center">
+  <div style="width:62px;height:62px;border-radius:999px;background:#5BB98B1f;border:1px solid #5BB98B55;display:flex;align-items:center;justify-content:center;margin:0 auto 18px;color:var(--green);font-size:30px;font-weight:800">✓</div>
+  <div class="big" style="margin-bottom:8px">Playlist created in Plex</div>
+  <p style="color:var(--muted);margin-bottom:22px">
+    {{ added }} track{{ '' if added == 1 else 's' }} added to
+    <span style="color:var(--text);font-weight:600">“{{ name }}”</span>.
+  </p>
 
-{% if missing %}
-<h2 class="miss">Still missing ({{ missing|length }})</h2>
-<ol>
-  {% for row in missing %}
-  <li>{{ row.artist }} - {{ row.title }}</li>
-  {% endfor %}
-</ol>
-{% endif %}
+  {% if missing %}
+  <div class="section-head" style="justify-content:center">
+    <span class="dot red"></span><span class="t">Still missing ({{ missing|length }})</span>
+  </div>
+  <ol style="text-align:left;display:inline-block;margin:0 auto;color:var(--muted)">
+    {% for row in missing %}
+    <li>{{ row.artist }} - {{ row.title }}</li>
+    {% endfor %}
+  </ol>
+  <div></div>
+  {% endif %}
 
-<p><a href="{{ url_for('index') }}">← do another</a></p>
+  <a href="{{ url_for('index') }}"><button class="btn-accent" style="margin-top:20px">Do another</button></a>
+</div>
 {% endblock %}

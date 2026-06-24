@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Updated — Setlist-er-ator{% endblock %}
 {% block content %}
-<p class="ok big">✓ Added {{ added }} track{{ '' if added == 1 else 's' }} to “{{ name }}”.</p>
-<p><a href="{{ url_for('history') }}">← back to history</a></p>
+<div class="panel" style="max-width:480px;margin:30px auto;padding:34px 30px;text-align:center">
+  <div style="width:62px;height:62px;border-radius:999px;background:#5BB98B1f;border:1px solid #5BB98B55;display:flex;align-items:center;justify-content:center;margin:0 auto 18px;color:var(--green);font-size:30px;font-weight:800">✓</div>
+  <div class="big" style="margin-bottom:8px">Playlist updated</div>
+  <p style="color:var(--muted);margin-bottom:22px">
+    Added {{ added }} track{{ '' if added == 1 else 's' }} to
+    <span style="color:var(--text);font-weight:600">“{{ name }}”</span>.
+  </p>
+  <a href="{{ url_for('history') }}"><button class="btn-accent">Back to history</button></a>
+</div>
 {% endblock %}

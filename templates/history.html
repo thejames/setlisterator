@@ -4,6 +4,7 @@
 <h2>History ({{ entries|length }})</h2>
 
 {% if entries %}
+<div class="panel">
 <table>
   <tr>
     <th>Processed</th><th>Show</th><th>Playlist</th>
@@ -11,31 +12,34 @@
   </tr>
   {% for e in entries %}
   <tr>
-    <td>{{ e.get("processed_at", "—") }}</td>
-    <td>{{ e.get("artist", "Unknown") }} — ({{ e.get("date", "?") }})</td>
+    <td class="sub">{{ e.get("processed_at", "—") }}</td>
+    <td>{{ e.get("artist", "Unknown") }} <span class="sub">({{ e.get("date", "?") }})</span></td>
     <td>{{ e.get("playlist_name", "—") }}</td>
     <td>{{ e.get("matched", 0) }} added{% if e.get("missing") %}
         <span class="miss">· {{ e.get("missing") }} missing</span>{% endif %}</td>
     <td>
-      <form method="post" action="{{ url_for('preview') }}" style="margin:0"
-            data-loading="Matching…">
-        <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
-        <button type="submit">Re-open</button>
-      </form>
-      <form method="post" action="{{ url_for('update_preview') }}" style="margin:0"
-            data-loading="Checking…">
-        <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
-        <input type="hidden" name="playlist_rating_key" value="{{ e.get('playlist_rating_key', '') }}">
-        <input type="hidden" name="name" value="{{ e.get('playlist_name', '') }}">
-        <button type="submit">Update</button>
-      </form>
-      {% if e.get("url") %}
-      <a href="{{ e.url }}" target="_blank" rel="noopener">setlist.fm ↗</a>
-      {% endif %}
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <form method="post" action="{{ url_for('preview') }}" style="margin:0"
+              data-loading="Matching…">
+          <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
+          <button type="submit">Re-open</button>
+        </form>
+        <form method="post" action="{{ url_for('update_preview') }}" style="margin:0"
+              data-loading="Checking…">
+          <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
+          <input type="hidden" name="playlist_rating_key" value="{{ e.get('playlist_rating_key', '') }}">
+          <input type="hidden" name="name" value="{{ e.get('playlist_name', '') }}">
+          <button type="submit">Update</button>
+        </form>
+        {% if e.get("url") %}
+        <a href="{{ e.url }}" target="_blank" rel="noopener">setlist.fm ↗</a>
+        {% endif %}
+      </div>
     </td>
   </tr>
   {% endfor %}
 </table>
+</div>
 {% else %}
 <p>No history yet — <a href="{{ url_for('index') }}">create a playlist</a> and
   it'll show up here.</p>

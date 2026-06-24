@@ -49,10 +49,15 @@
     row.querySelector(".chosen").textContent = "✓ " + label;
     row.querySelector(".searcher").hidden = true;
     row.querySelector(".results").textContent = "";
-    const matchcell = row.querySelector(".matchcell");
-    if (matchcell) matchcell.textContent = "manual";
     row.classList.remove("missing");
     row.classList.add("resolved");
+    updateCount();
+  }
+
+  // Keep the action bar's "N of M selected" in sync with the Add checkboxes.
+  function updateCount() {
+    const out = document.querySelector("[data-selected]");
+    if (out) out.textContent = document.querySelectorAll("input.inc:checked").length;
   }
 
   // Loading feedback: a form with data-loading shows that label on its submit
@@ -79,4 +84,9 @@
       if (e.key === "Enter") { e.preventDefault(); runSearch(row); }
     });
   });
+
+  document.querySelectorAll("input.inc").forEach(function (cb) {
+    cb.addEventListener("change", updateCount);
+  });
+  updateCount();
 })();

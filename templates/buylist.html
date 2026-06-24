@@ -6,16 +6,18 @@
   your shopping list.</p>
 
 {% if items %}
+<div class="panel">
 <table>
   <tr><th>Artist</th><th>Title</th><th>Missing from</th></tr>
   {% for it in items %}
   <tr>
     <td>{{ it.artist }}</td>
     <td>{{ it.title }}</td>
-    <td>{{ it.shows }} show{{ '' if it.shows == 1 else 's' }}</td>
+    <td class="sub">{{ it.shows }} show{{ '' if it.shows == 1 else 's' }}</td>
   </tr>
   {% endfor %}
 </table>
+</div>
 {% else %}
 <p>Nothing to buy — either you've matched everything, or you haven't
   <a href="{{ url_for('index') }}">created any playlists</a> yet.</p>

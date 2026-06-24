@@ -159,7 +159,8 @@ outside the repo, so it won't be committed.
 
 ## Web interface
 
-A small local web UI wraps the same matching pipeline:
+A small local web UI (dark theme, server-rendered Jinja + a little vanilla JS —
+still no build step) wraps the same matching pipeline:
 
 ```bash
 ./.venv/bin/pip install -r requirements.txt   # pulls in Flask

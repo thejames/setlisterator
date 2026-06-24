@@ -30,6 +30,20 @@ def _error(title, message, status=200):
     return render_template("error.html", title=title, message=message), status
 
 
+def _stats(result):
+    """Counts for the preview stat chips (exclusive: sum == total)."""
+    matched = result["matched"]
+    multi = sum(1 for m in matched if len(m.get("candidates", [])) > 1)
+    single = [m for m in matched if len(m.get("candidates", [])) <= 1]
+    return {
+        "total": len(result["songs"]),
+        "exact": sum(1 for m in single if m.get("quality") == "exact"),
+        "fuzzy": sum(1 for m in single if m.get("quality") == "fuzzy"),
+        "multi": multi,
+        "missing": len(result["missing"]),
+    }
+
+
 @app.get("/")
 def index():
     try:
@@ -120,7 +134,7 @@ def preview():
 
     prior = core.load_history(core.history_path()).get(result["setlist_id"])
     return render_template(
-        "preview.html", result=result, prior=prior,
+        "preview.html", result=result, prior=prior, stats=_stats(result),
         missing_json=json.dumps(result["missing"]),
         fuzzy_json=json.dumps(result["fuzzy"]))
 

@@ -230,12 +230,23 @@ def test_preview_renders_matches(client, monkeypatch):
     assert 'value="21"' in body                     # the alternate album option
     assert "Suck on This (Live)" in body            # alternate album shown
     # each matched row has an include checkbox, checked by default
-    assert 'name="include" value="1" checked' in body
-    assert 'name="include" value="2" checked' in body
+    assert 'name="include" value="1" class="inc" checked' in body
+    assert 'name="include" value="2" class="inc" checked' in body
     # the missing song is shown inline in the full-setlist table...
-    assert "not in your library" in body
+    assert "No match in library" in body
     assert 'class="missing"' in body
     assert "go buy these" not in body               # label removed
+    # design: stat chips and the live selected count
+    assert 'class="chip' in body
+    assert "data-selected" in body
+
+
+def test_stats_counts_are_exclusive():
+    import web as webmod
+    result = _preview_result()   # Tommy(exact,1 cand), Jerry(exact,2 cand), 1 missing
+    s = webmod._stats(result)
+    assert s == {"total": 3, "exact": 1, "fuzzy": 0, "multi": 1, "missing": 1}
+    assert s["exact"] + s["fuzzy"] + s["multi"] + s["missing"] == s["total"]
 
 
 def test_preview_requires_input(client):
@@ -320,7 +331,7 @@ def test_preview_disables_create_when_no_matches(client, monkeypatch):
     monkeypatch.setattr(core, "gather_matches", lambda c, s, n=None: all_missing)
     monkeypatch.setattr(core, "load_history", lambda p: {})
     body = client.post("/preview", data={"setlist": "abc"}).data.decode()
-    assert "<button type=\"submit\" disabled>" in body
+    assert "disabled>Nothing in your library to add" in body
     assert "Some Song" in body            # still shows the (missing) setlist
 
 

@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ title }} — Setlist-er-ator{% endblock %}
 {% block content %}
-<h2 class="err">{{ title }}</h2>
-<p>{{ message }}</p>
-<p><a href="{{ url_for('index') }}">← back</a></p>
+<div class="panel card-missing" style="max-width:560px;padding:24px 26px">
+  <h2 class="miss" style="margin-top:0">{{ title }}</h2>
+  <p style="color:var(--text2)">{{ message }}</p>
+  <p><a href="{{ url_for('index') }}">← back</a></p>
+</div>
 {% endblock %}

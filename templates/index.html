@@ -1,15 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
-<form method="post" action="{{ url_for('preview') }}" data-loading="Matching the setlist…">
-  <label>setlist.fm URL or ID
-    <input name="setlist" autofocus required
-           placeholder="https://www.setlist.fm/…  or  6b756686">
-  </label>
-  <label>Playlist name <span style="font-weight:400">(optional)</span>
-    <input name="name" placeholder="auto-generated from the show">
-  </label>
-  <button type="submit">Preview</button>
-</form>
-<p class="hint">Matches the show against your Plex library and shows what it
-found — nothing is created until you confirm.</p>
+<div class="panel" style="padding:28px 26px;max-width:620px">
+  <form method="post" action="{{ url_for('preview') }}" data-loading="Matching the setlist…">
+    <label>setlist.fm URL or ID
+      <input name="setlist" autofocus required
+             placeholder="https://www.setlist.fm/…  or  6b756686">
+    </label>
+    <label>Playlist name <span style="font-weight:400;color:var(--faint)">(optional)</span>
+      <input name="name" placeholder="auto-generated from the show">
+    </label>
+    <button type="submit" class="btn-accent" style="margin-top:8px">Preview</button>
+  </form>
+</div>
+<p class="hint" style="margin-top:16px">Matches the show against your Plex library
+  and shows what it found — nothing is created until you confirm.</p>
 {% endblock %}

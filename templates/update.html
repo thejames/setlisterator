@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Update — Setlist-er-ator{% endblock %}
 {% block content %}
-<p class="show">Update “{{ playlist.title }}”</p>
-<p class="hint">Songs from this setlist that are now in your library but not yet
-  in the playlist. Add-only — nothing is removed.</p>
+<div class="label">Update playlist</div>
+<p class="show">{{ playlist.title }}</p>
+<p class="hint" style="margin-top:10px">Songs from this setlist now in your library
+  but not yet in the playlist. Add-only — nothing is removed.</p>
 
 {% if new_songs %}
 <form method="post" action="{{ url_for('update') }}" data-loading="Adding…">
@@ -15,46 +16,69 @@
   <input type="hidden" name="date" value="{{ result.show.date }}">
   <input type="hidden" name="missing_json" value="{{ missing_json }}">
 
-  <button type="submit">Add {{ new_songs|length }} track{{ '' if new_songs|length == 1 else 's' }} to the playlist</button>
+  <div class="panel" style="margin-top:18px">
+    <table>
+      <tr>
+        <th style="text-align:center;width:54px">Add</th>
+        <th style="text-align:center;width:46px">#</th>
+        <th>Song title</th><th>Plex track</th>
+        <th style="text-align:right;width:160px">Match</th>
+      </tr>
+      {% for s in new_songs %}
+      {% set status = 'multi' if s.candidates|length > 1 else s.quality %}
+      <tr>
+        <td style="text-align:center">
+          <input type="checkbox" name="include" value="{{ s.position }}" class="inc" checked>
+        </td>
+        <td class="num">{{ '%02d' % s.position }}</td>
+        <td>{{ s.title }}</td>
+        <td>
+          {% if s.candidates|length > 1 %}
+          <select name="pick_{{ s.position }}">
+            {% for c in s.candidates %}
+            <option value="{{ c.rating_key }}">{{ c.track_artist }} — {{ c.track_title }}{% if c.album %} · {{ c.album }}{% endif %} [{{ c.tier }}/{{ c.source }}]</option>
+            {% endfor %}
+          </select>
+          {% else %}
+          <div>{{ s.track_artist }} — {{ s.track_title }}</div>
+          {% if s.album %}<div class="sub">{{ s.album }}</div>{% endif %}
+          <input type="hidden" name="pick_{{ s.position }}" value="{{ s.rating_key }}">
+          {% endif %}
+        </td>
+        <td style="text-align:right">
+          <span class="sub" style="margin-right:8px">{{ s.tier }}·{{ s.source }}</span>
+          <span class="pill pill-{{ status }}">{% if status == 'multi' %}{{ s.candidates|length }} matches{% elif status == 'fuzzy' %}Fuzzy{% else %}Exact{% endif %}</span>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
 
-  <table>
-    <tr><th>Add?</th><th>#</th><th>Setlist song</th><th>Plex track</th><th>Match</th></tr>
-    {% for s in new_songs %}
-    <tr class="{{ 'fuzzy' if s.quality == 'fuzzy' else 'exact' }}">
-      <td><input type="checkbox" name="include" value="{{ s.position }}" checked></td>
-      <td>{{ s.position }}</td>
-      <td>{{ s.title }}</td>
-      <td>
-        {% if s.candidates|length > 1 %}
-        <select name="pick_{{ s.position }}">
-          {% for c in s.candidates %}
-          <option value="{{ c.rating_key }}">
-            {{ c.track_artist }} — {{ c.track_title }}{% if c.album %} · {{ c.album }}{% endif %}
-            [{{ c.tier }}/{{ c.source }}]
-          </option>
-          {% endfor %}
-        </select>
-        {% else %}
-        {{ s.track_artist }} — {{ s.track_title }}{% if s.album %} · {{ s.album }}{% endif %}
-        <input type="hidden" name="pick_{{ s.position }}" value="{{ s.rating_key }}">
-        {% endif %}
-      </td>
-      <td>{{ s.tier }}/{{ s.source }}</td>
-    </tr>
-    {% endfor %}
-  </table>
+  <div class="actionbar"><div class="inner">
+    <div class="count"><b data-selected>{{ new_songs|length }}</b><span>of {{ new_songs|length }} new selected</span></div>
+    <div class="grow"></div>
+    <button type="submit" class="btn-accent">▶ Add to playlist</button>
+  </div></div>
 </form>
 {% else %}
-<p class="ok">✓ Nothing new — “{{ playlist.title }}” already has everything from
-  this setlist that's in your library.</p>
+<div class="panel" style="padding:22px 24px;margin-top:18px">
+  <span class="chosen">✓ Nothing new</span> — “{{ playlist.title }}” already has
+  everything from this setlist that's in your library.
+</div>
 {% endif %}
 
 {% if result.missing %}
-<h2 class="miss">Still missing ({{ result.missing|length }})</h2>
-<ol>
+<div class="section-head">
+  <span class="dot red"></span><span class="t">Still missing</span>
+  <span class="s">not in your Plex library</span>
+</div>
+<div class="cards">
   {% for pos, artist, title in result.missing %}
-  <li>{{ artist }} - {{ title }}</li>
+  <div class="card card-missing">
+    <span class="num">{{ '%02d' % pos }}</span>
+    <span style="flex:1">{{ artist }} - {{ title }}</span>
+  </div>
   {% endfor %}
-</ol>
+</div>
 {% endif %}
 {% endblock %}
