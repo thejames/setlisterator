@@ -1,23 +1,28 @@
 {% extends "base.html" %}
 {% block title %}Buy list — Setlist-er-ator{% endblock %}
 {% block content %}
-<h2>Buy list ({{ items|length }})</h2>
-<p class="hint">Every track missing across the shows you've created, deduped —
-  your shopping list.</p>
+<h2>Buy list ({{ total }} track{{ '' if total == 1 else 's' }} ·
+  {{ groups|length }} artist{{ '' if groups|length == 1 else 's' }})</h2>
+<p class="hint">Every track missing across the shows you've created, deduped and
+  grouped by artist — your shopping list.</p>
 
-{% if items %}
+{% if groups %}
+{% for g in groups %}
+<div class="section-head">
+  <span class="t">{{ g.artist }}</span>
+  <span class="s">{{ g.tracks|length }} track{{ '' if g.tracks|length == 1 else 's' }}</span>
+</div>
 <div class="panel">
 <table>
-  <tr><th>Artist</th><th>Title</th><th>Missing from</th></tr>
-  {% for it in items %}
+  {% for it in g.tracks %}
   <tr>
-    <td>{{ it.artist }}</td>
     <td>{{ it.title }}</td>
-    <td class="sub">{{ it.shows }} show{{ '' if it.shows == 1 else 's' }}</td>
+    <td class="sub" style="text-align:right;width:130px">{{ it.shows }} show{{ '' if it.shows == 1 else 's' }}</td>
   </tr>
   {% endfor %}
 </table>
 </div>
+{% endfor %}
 {% else %}
 <p>Nothing to buy — either you've matched everything, or you haven't
   <a href="{{ url_for('index') }}">created any playlists</a> yet.</p>

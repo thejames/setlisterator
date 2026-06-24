@@ -90,14 +90,18 @@ def test_buylist_aggregates_and_dedupes(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {
         "a": {"missing_tracks": [
             {"artist": "Primus", "title": "Jilly's on Smack"},
-            {"artist": "Primus", "title": "The Ol' Grizz"}]},
+            {"artist": "Primus", "title": "The Ol' Grizz"},
+            {"artist": "Goose", "title": "Arrow"}]},
         "b": {"missing_tracks": [
             {"artist": "Primus", "title": "Jilly's on Smack"}]},  # dup
     })
     body = client.get("/buylist").data.decode()
-    # deduped to two unique tracks; the repeated one shows in 2 shows
+    # deduped to one Jilly's entry; the repeated one counts as 2 shows
     assert body.count("Jilly&#39;s on Smack") == 1
     assert "2 shows" in body
+    # grouped by artist, A->Z (Goose before Primus)
+    assert "Goose" in body and "Primus" in body
+    assert body.index("Goose") < body.index("Primus")
     assert "The Ol&#39; Grizz" in body
 
 

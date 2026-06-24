@@ -77,10 +77,16 @@ def buylist():
             row = by_key.setdefault(
                 key, {"artist": artist, "title": title, "shows": 0})
             row["shows"] += 1
-    items = sorted(by_key.values(),
-                   key=lambda r: (-r["shows"], r["artist"].lower(),
-                                  r["title"].lower()))
-    return render_template("buylist.html", items=items)
+    # Group the deduped tracks by artist, artists A→Z, titles A→Z within.
+    by_artist = {}
+    for row in by_key.values():
+        by_artist.setdefault(row["artist"], []).append(row)
+    groups = [
+        {"artist": artist or "Unknown",
+         "tracks": sorted(by_artist[artist], key=lambda r: r["title"].lower())}
+        for artist in sorted(by_artist, key=lambda a: a.lower())
+    ]
+    return render_template("buylist.html", groups=groups, total=len(by_key))
 
 
 @app.get("/search")
