@@ -198,6 +198,26 @@ caches the result back into history — a best-effort hint shown as "likely from
 > token, so it binds to `127.0.0.1` and has no authentication. Don't expose it
 > to a network.
 
+## Deploy (self-host with Docker)
+
+To run it as an always-on service on your network — your Mac, a NAS, a Pi —
+anywhere that can reach Plex directly:
+
+```bash
+cp .env.example .env       # fill in your keys/token and PLEX_BASEURL
+docker compose up -d       # builds the image and starts it
+# → http://<that-host>:5001
+```
+
+It runs under gunicorn, persists `history.json` (including the album cache) in a
+named volume, and reaches your Plex over the LAN — no tunnel needed. Change the
+published port by editing the `ports:` mapping in `docker-compose.yml`.
+
+> **Still unauthenticated.** This exposes the app (and your Plex token's
+> reach) to anyone on the network, so keep it on a trusted LAN. For remote
+> access, put it behind a tunnel (Tailscale, Cloudflare Tunnel) with
+> authentication — not included here.
+
 ## How matching works
 
 Each setlist song is matched to a Plex track in two stages:

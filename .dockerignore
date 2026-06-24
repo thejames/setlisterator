@@ -1,0 +1,15 @@
+.git/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+data/
+# secrets are passed at runtime via env_file — never bake them into the image
+.env
+# not needed in the image
+test_*.py
+.github/
+README.md

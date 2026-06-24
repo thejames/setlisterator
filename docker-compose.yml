@@ -1,0 +1,16 @@
+services:
+  setlisterator:
+    build: .
+    image: setlisterator
+    container_name: setlisterator
+    env_file: .env                 # SETLISTFM_API_KEY, PLEX_BASEURL, PLEX_TOKEN, …
+    environment:
+      SETLIST_TO_PLEX_HISTORY: /data/history.json
+    ports:
+      - "5001:5001"                # http://<this-host>:5001
+    volumes:
+      - setlisterator-data:/data   # persists history.json (incl. album cache)
+    restart: unless-stopped
+
+volumes:
+  setlisterator-data:
