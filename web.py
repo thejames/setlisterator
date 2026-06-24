@@ -65,9 +65,19 @@ def history():
 @app.get("/buylist")
 def buylist():
     """Aggregate every show's missing tracks into one deduped buy-list."""
-    # No config needed — this only reads the local history file.
+    # No config needed — this only reads the local history file. Lazily enrich
+    # each missing track with its likely album (MusicBrainz), caching the result
+    # back into history so it's only looked up once.
+    path = core.history_path()
+    history = core.load_history(path)
+    if core.enrich_missing_albums(history):
+        try:
+            core.save_history(path, history)
+        except OSError:
+            pass
+
     by_key = {}
-    for entry in core.load_history(core.history_path()).values():
+    for entry in history.values():
         for track in entry.get("missing_tracks", []):
             artist = track.get("artist", "")
             title = track.get("title", "")
@@ -75,8 +85,10 @@ def buylist():
             if not key:
                 continue
             row = by_key.setdefault(
-                key, {"artist": artist, "title": title, "shows": 0})
+                key, {"artist": artist, "title": title, "album": "", "shows": 0})
             row["shows"] += 1
+            if not row["album"] and track.get("album"):
+                row["album"] = track["album"]
     # Group the deduped tracks by artist, artists A→Z, titles A→Z within.
     by_artist = {}
     for row in by_key.values():

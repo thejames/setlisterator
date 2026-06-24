@@ -188,7 +188,11 @@ show against your *current* library and shows the tracks that are now available
 but not yet in the playlist, for you to confirm. Update is **add-only** — it
 tops up the existing playlist (no new copy, nothing removed), so when you buy a
 song that was missing, you can fold it into the playlist you already made. The
-**Buy list** link aggregates every show's missing tracks into one deduped list.
+**Buy list** link aggregates every show's missing tracks into one deduped list,
+grouped by artist. The first time it's viewed it looks up each missing track's
+likely album from [MusicBrainz](https://musicbrainz.org/) (free, no API key) and
+caches the result back into history — a best-effort hint shown as "likely from
+…", omitted when there's no confident match. It degrades gracefully offline.
 
 > **Local only.** The app talks to your local Plex server and holds your Plex
 > token, so it binds to `127.0.0.1` and has no authentication. Don't expose it

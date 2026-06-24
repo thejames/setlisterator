@@ -16,7 +16,10 @@
 <table>
   {% for it in g.tracks %}
   <tr>
-    <td>{{ it.title }}</td>
+    <td>
+      {{ it.title }}
+      {% if it.album %}<div class="sub">likely from {{ it.album }}</div>{% endif %}
+    </td>
     <td class="sub" style="text-align:right;width:130px">{{ it.shows }} show{{ '' if it.shows == 1 else 's' }}</td>
   </tr>
   {% endfor %}

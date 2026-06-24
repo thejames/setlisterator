@@ -48,6 +48,7 @@ import logging
 import os
 import re
 import sys
+import time
 from collections import namedtuple
 from datetime import datetime
 from pathlib import Path
@@ -530,6 +531,84 @@ def should_process(history, setlist_id, force, is_tty, prompt_fn=input):
         return prompt_fn("Re-process? [y/N] ").strip().lower() in ("y", "yes")
     print(notice + " Use --force to re-process.", file=sys.stderr)
     return False
+
+
+# ---------------------------------------------------------------------------
+# MusicBrainz: best-guess album for a missing track (free, no API key)
+# ---------------------------------------------------------------------------
+
+MUSICBRAINZ_API = "https://musicbrainz.org/ws/2/recording/"
+_MB_UA = "setlisterator/1.0 ( https://github.com/thejames/setlisterator )"
+_mb_last_request = 0.0  # monotonic timestamp, for ~1 req/sec rate limiting
+
+
+def _mb_get(artist, title):
+    """Query the MusicBrainz recording search; return parsed JSON or None.
+
+    Honors MusicBrainz's ~1 request/second rate limit and fails soft (None) on
+    any network/HTTP/JSON error so callers degrade gracefully when offline.
+    """
+    global _mb_last_request
+    wait = 1.1 - (time.monotonic() - _mb_last_request)
+    if wait > 0:
+        time.sleep(wait)
+    try:
+        resp = requests.get(
+            MUSICBRAINZ_API,
+            params={"query": f'artist:"{artist}" AND recording:"{title}"',
+                    "fmt": "json", "limit": 25},
+            headers={"User-Agent": _MB_UA}, timeout=15)
+        _mb_last_request = time.monotonic()
+        return resp.json() if resp.status_code == 200 else None
+    except (requests.exceptions.RequestException, ValueError):
+        _mb_last_request = time.monotonic()
+        return None
+
+
+def lookup_album(artist, title):
+    """Best-guess studio album for a track via MusicBrainz; "" if unknown.
+
+    Counts how often each studio release-group (primary type 'Album', no
+    secondary types like Live/Compilation) backs the matching recordings and
+    returns the most frequent — the reissue-heavy canonical album outvotes
+    one-off live/compilation releases.
+    """
+    if not (artist and title):
+        return ""
+    data = _mb_get(artist, title)
+    if not data:
+        return ""
+    freq = {}
+    for rec in data.get("recordings", []):
+        for rel in rec.get("releases", []):
+            rg = rel.get("release-group") or {}
+            if rg.get("primary-type") != "Album" or rg.get("secondary-types"):
+                continue
+            name = rg.get("title")
+            if name:
+                freq[name] = freq.get(name, 0) + 1
+    return max(freq, key=lambda n: freq[n]) if freq else ""
+
+
+def enrich_missing_albums(history, limit=40):
+    """Fill 'album' on history missing_tracks via MusicBrainz, lazily + cached:
+    only items without an 'album' key are looked up, at most ``limit`` per call
+    (bounds page latency; the rest resolve on later loads). Returns True if any
+    entry changed, so the caller can persist.
+    """
+    changed = False
+    done = 0
+    for entry in history.values():
+        for track in entry.get("missing_tracks", []):
+            if "album" in track:
+                continue
+            if done >= limit:
+                return changed
+            track["album"] = lookup_album(track.get("artist", ""),
+                                          track.get("title", ""))
+            changed = True
+            done += 1
+    return changed
 
 
 # ---------------------------------------------------------------------------

@@ -499,6 +499,65 @@ def test_main_backfill_flag(monkeypatch, capsys):
     assert "Backfilled 3 entries" in capsys.readouterr().out
 
 
+# --- MusicBrainz album lookup ----------------------------------------------
+
+_MB_CANNED = {"recordings": [
+    {"releases": [
+        {"release-group": {"primary-type": "Album", "secondary-types": [],
+                           "title": "Studio One"}},
+        {"release-group": {"primary-type": "Album", "secondary-types": ["Live"],
+                           "title": "Live Album"}},
+    ]},
+    {"releases": [
+        {"release-group": {"primary-type": "Album", "secondary-types": [],
+                           "title": "Studio One"}},
+        {"release-group": {"primary-type": "Album", "secondary-types": [],
+                           "title": "Other Studio"}},
+    ]},
+]}
+
+
+def test_lookup_album_picks_most_frequent_studio(monkeypatch):
+    monkeypatch.setattr(m, "_mb_get", lambda a, t: _MB_CANNED)
+    # Studio One appears 2x, Other Studio 1x, the live album is excluded.
+    assert m.lookup_album("Band", "Song") == "Studio One"
+
+
+def test_lookup_album_empty_when_only_live_or_no_data(monkeypatch):
+    monkeypatch.setattr(m, "_mb_get", lambda a, t: {"recordings": [{"releases": [
+        {"release-group": {"primary-type": "Album", "secondary-types": ["Live"],
+                           "title": "L"}}]}]})
+    assert m.lookup_album("Band", "Song") == ""
+    monkeypatch.setattr(m, "_mb_get", lambda a, t: None)   # offline / error
+    assert m.lookup_album("Band", "Song") == ""
+
+
+def test_lookup_album_requires_artist_and_title():
+    assert m.lookup_album("", "X") == ""
+    assert m.lookup_album("X", "") == ""
+
+
+def test_enrich_missing_albums_caches_and_is_idempotent(monkeypatch):
+    monkeypatch.setattr(m, "lookup_album", lambda a, t: "Found Album")
+    history = {"e": {"missing_tracks": [
+        {"artist": "A", "title": "B"},
+        {"artist": "A", "title": "C", "album": "Already"},  # cached -> skip
+    ]}}
+    assert m.enrich_missing_albums(history) is True
+    tracks = history["e"]["missing_tracks"]
+    assert tracks[0]["album"] == "Found Album"
+    assert tracks[1]["album"] == "Already"                  # untouched
+    assert m.enrich_missing_albums(history) is False        # all cached now
+
+
+def test_enrich_missing_albums_respects_limit(monkeypatch):
+    monkeypatch.setattr(m, "lookup_album", lambda a, t: "X")
+    history = {"e": {"missing_tracks":
+                     [{"artist": "A", "title": str(i)} for i in range(5)]}}
+    m.enrich_missing_albums(history, limit=2)
+    assert sum("album" in t for t in history["e"]["missing_tracks"]) == 2
+
+
 # ---------------------------------------------------------------------------
 # Core pipeline: load_config / gather_matches / create_playlist
 # ---------------------------------------------------------------------------
