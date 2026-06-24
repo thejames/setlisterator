@@ -451,6 +451,54 @@ def test_main_requires_setlist_or_history():
         m.main([])
 
 
+# --- backfill_history / --backfill -----------------------------------------
+
+def test_backfill_history_fills_count_only_entries(monkeypatch, tmp_path):
+    hist = tmp_path / "h.json"
+    m.save_history(hist, {
+        "stale": {"id": "stale", "url": "http://x-aaa.html", "missing": 2,
+                  "playlist_name": "Stale"},                 # count only -> fill
+        "done": {"id": "done", "missing": 1, "playlist_name": "Done",
+                 "missing_tracks": [{"artist": "A", "title": "B"}]},  # has detail
+        "complete": {"id": "complete", "missing": 0,
+                     "playlist_name": "Complete"},           # nothing missing
+    })
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    monkeypatch.setattr(m, "gather_matches", lambda cfg, sid, name=None: {
+        "missing": [(1, "Stale Artist", "Song One"),
+                    (2, "Stale Artist", "Song Two")]})
+
+    assert m.backfill_history(_CONFIG) == 1
+    saved = m.load_history(hist)
+    assert saved["stale"]["missing_tracks"] == [
+        {"artist": "Stale Artist", "title": "Song One"},
+        {"artist": "Stale Artist", "title": "Song Two"}]
+    assert saved["stale"]["missing"] == 2
+    assert saved["done"]["missing_tracks"] == [{"artist": "A", "title": "B"}]
+    assert "missing_tracks" not in saved["complete"]
+    assert m.backfill_history(_CONFIG) == 0   # idempotent
+
+
+def test_backfill_history_skips_on_setlist_error(monkeypatch, tmp_path):
+    hist = tmp_path / "h.json"
+    m.save_history(hist, {"x": {"id": "x", "url": "http://x-aaa.html",
+                                "missing": 1, "playlist_name": "X"}})
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+
+    def boom(cfg, sid, name=None):
+        raise m.SetlistError("gone")
+    monkeypatch.setattr(m, "gather_matches", boom)
+    assert m.backfill_history(_CONFIG) == 0          # skipped, not crashed
+    assert "missing_tracks" not in m.load_history(hist)["x"]
+
+
+def test_main_backfill_flag(monkeypatch, capsys):
+    monkeypatch.setattr(m, "load_config", lambda: _CONFIG)
+    monkeypatch.setattr(m, "backfill_history", lambda config: 3)
+    assert m.main(["--backfill"]) == m.EXIT_OK
+    assert "Backfilled 3 entries" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # Core pipeline: load_config / gather_matches / create_playlist
 # ---------------------------------------------------------------------------

@@ -119,12 +119,15 @@ failing.
 | -------------- | ------------------------------------------------------------ |
 | `--name NAME`  | override the auto-generated playlist name                    |
 | `--history`    | list previously created playlists (newest first) and exit    |
+| `--backfill`   | fill in missing-track detail for old history entries and exit |
 | `--quiet`      | suppress per-song match logging on stderr                    |
 | `--force`      | re-process a setlist even if it was processed before         |
 | `--no-history` | don't read or write the processed-setlist history            |
 
 `--history` reads only the local history file, so it works without any Plex or
-setlist.fm configuration: `setlist_to_plex.py --history`.
+setlist.fm configuration: `setlist_to_plex.py --history`. `--backfill` re-matches
+older shows (those recorded before per-track missing detail existed) so they
+show up in the web **Buy list**; it needs the usual config and is idempotent.
 
 ## Logging vs. report
 

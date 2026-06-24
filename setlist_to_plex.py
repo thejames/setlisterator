@@ -37,6 +37,9 @@ Example usage:
 
     # List previously created playlists (no config needed)
     python setlist_to_plex.py --history
+
+    # Backfill missing-track detail for old history entries
+    python setlist_to_plex.py --backfill
 """
 
 import argparse
@@ -817,6 +820,37 @@ def add_to_playlist(config, rating_key, name, rating_keys, history_meta=None):
     return playlist.title, len(tracks)
 
 
+def backfill_history(config):
+    """Fill in missing_tracks for history entries that have a missing count but
+    no track list (created before track-level history). Re-matches each setlist
+    against the current library. Idempotent — only touches count-only entries.
+    Returns the number of entries updated.
+    """
+    path = history_path()
+    history = load_history(path)
+    updated = 0
+    for sid, entry in history.items():
+        if not entry.get("missing") or entry.get("missing_tracks"):
+            continue  # nothing missing, or already has the detail
+        ref = entry.get("url") or entry.get("id")
+        if not ref:
+            continue
+        label = entry.get("playlist_name", sid)
+        try:
+            result = gather_matches(config, parse_setlist_id(ref), None)
+        except (SetlistError, PlexError, ValueError) as exc:
+            logger.warning("Backfill skipped '%s' (%s).", label, exc)
+            continue
+        entry["missing_tracks"] = [{"artist": a, "title": t}
+                                   for (_pos, a, t) in result["missing"]]
+        entry["missing"] = len(entry["missing_tracks"])
+        logger.info("Backfilled '%s' — %d missing.", label, entry["missing"])
+        updated += 1
+    if updated:
+        save_history(path, history)
+    return updated
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -832,6 +866,9 @@ def main(argv=None):
     parser.add_argument(
         "--history", action="store_true",
         help="list previously created playlists and exit")
+    parser.add_argument(
+        "--backfill", action="store_true",
+        help="fill in missing-track detail for old history entries and exit")
     parser.add_argument(
         "--quiet", action="store_true",
         help="suppress per-song match logging on stderr")
@@ -852,8 +889,21 @@ def main(argv=None):
         print_history()
         return EXIT_OK
 
+    # --backfill re-matches old shows, so it needs config (but no setlist arg).
+    if args.backfill:
+        try:
+            config = load_config()
+        except ConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_CONFIG
+        n = backfill_history(config)
+        print(f"Backfilled {n} entr{'y' if n == 1 else 'ies'}." if n
+              else "Nothing to backfill — all entries already have track detail.")
+        return EXIT_OK
+
     if not args.setlist:
-        parser.error("a setlist ID or URL is required (or use --history)")
+        parser.error(
+            "a setlist ID or URL is required (or use --history / --backfill)")
 
     try:
         config = load_config()
