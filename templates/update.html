@@ -17,12 +17,12 @@
   <input type="hidden" name="missing_json" value="{{ missing_json }}">
 
   <div class="panel" style="margin-top:18px">
-    <table>
+    <table class="tracktable">
       <tr>
         <th style="text-align:center;width:54px">Add</th>
         <th style="text-align:center;width:46px">#</th>
-        <th>Song title</th><th>Plex track</th>
-        <th style="text-align:right;width:160px">Match</th>
+        <th style="width:30%">Song title</th><th>Plex track</th>
+        <th style="text-align:right;width:150px">Match</th>
       </tr>
       {% for s in new_songs %}
       {% set status = 'multi' if s.candidates|length > 1 else s.quality %}
@@ -31,7 +31,7 @@
           <input type="checkbox" name="include" value="{{ s.position }}" class="inc" checked>
         </td>
         <td class="num">{{ '%02d' % s.position }}</td>
-        <td>{{ s.title }}</td>
+        <td class="trunc">{{ s.title }}</td>
         <td>
           {% if s.candidates|length > 1 %}
           <select name="pick_{{ s.position }}">
@@ -40,8 +40,8 @@
             {% endfor %}
           </select>
           {% else %}
-          <div>{{ s.track_artist }} — {{ s.track_title }}</div>
-          {% if s.album %}<div class="sub">{{ s.album }}</div>{% endif %}
+          <div class="trunc">{{ s.track_artist }} — {{ s.track_title }}</div>
+          {% if s.album %}<div class="sub trunc">{{ s.album }}</div>{% endif %}
           <input type="hidden" name="pick_{{ s.position }}" value="{{ s.rating_key }}">
           {% endif %}
         </td>

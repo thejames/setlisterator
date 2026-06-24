@@ -43,12 +43,12 @@
 
   {% if result.songs %}
   <div class="panel">
-    <table>
+    <table class="tracktable">
       <tr>
         <th style="text-align:center;width:54px">Add</th>
         <th style="text-align:center;width:46px">#</th>
-        <th>Song title</th><th>Plex track</th>
-        <th style="text-align:right;width:160px">Match</th>
+        <th style="width:30%">Song title</th><th>Plex track</th>
+        <th style="text-align:right;width:150px">Match</th>
       </tr>
       {% for s in result.songs %}
       {% set status = 'missing' if not s.matched else ('multi' if s.candidates|length > 1 else s.quality) %}
@@ -61,16 +61,18 @@
           {% endif %}
         </td>
         <td class="num">{{ '%02d' % s.position }}</td>
-        <td>{{ s.title }}</td>
+        <td class="trunc">{{ s.title }}</td>
         <td>
           {% if not s.matched %}
             <input type="hidden" name="pick_{{ s.position }}" class="pick" value="" disabled>
             <span class="chosen"></span>
-            <span class="searcher">
+            <div class="searcher">
               <span class="hint" style="font-style:italic">No match in library.</span>
-              <input type="search" class="q" value="{{ s.title }}" placeholder="search your library…" aria-label="Search library">
-              <button type="button" class="go">Search</button>
-            </span>
+              <div class="searchrow">
+                <input type="search" class="q" value="{{ s.title }}" placeholder="search your library…" aria-label="Search library">
+                <button type="button" class="go">Search</button>
+              </div>
+            </div>
             <div class="results"></div>
           {% elif s.candidates|length > 1 %}
             <select name="pick_{{ s.position }}">
@@ -79,8 +81,8 @@
               {% endfor %}
             </select>
           {% else %}
-            <div>{{ s.track_artist }} — {{ s.track_title }}</div>
-            {% if s.album %}<div class="sub">{{ s.album }}</div>{% endif %}
+            <div class="trunc">{{ s.track_artist }} — {{ s.track_title }}</div>
+            {% if s.album %}<div class="sub trunc">{{ s.album }}</div>{% endif %}
             <input type="hidden" name="pick_{{ s.position }}" value="{{ s.rating_key }}">
           {% endif %}
         </td>
