@@ -55,6 +55,21 @@
     row.classList.add("resolved");
   }
 
+  // Loading feedback: a form with data-loading shows that label on its submit
+  // button while the (slow, Plex-bound) request is in flight. Disabling after
+  // submit also guards against double-clicks.
+  document.querySelectorAll("form[data-loading]").forEach(function (form) {
+    form.addEventListener("submit", function () {
+      const btn = form.querySelector(
+        "button[type=submit], button:not([type])");
+      if (btn && !btn.disabled) {
+        btn.dataset.label = btn.textContent;
+        btn.textContent = form.dataset.loading;
+        btn.disabled = true;
+      }
+    });
+  });
+
   document.querySelectorAll("tr.missing").forEach(function (row) {
     const go = row.querySelector(".go");
     const q = row.querySelector(".q");

@@ -66,7 +66,10 @@ def _preview_result():
 def test_index_ok(client):
     resp = client.get("/")
     assert resp.status_code == 200
-    assert b"setlist.fm URL or ID" in resp.data
+    body = resp.data.decode()
+    assert "setlist.fm URL or ID" in body
+    assert 'data-loading="Matching the setlist…"' in body  # loading feedback
+    assert "app.js" in body                                # script on every page
 
 
 def test_port_default_and_override(monkeypatch):

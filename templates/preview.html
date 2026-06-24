@@ -20,7 +20,7 @@
 
 {# The matched table lives inside the form so each per-song <select name="pick">
    submits the chosen track, in setlist order. #}
-<form method="post" action="{{ url_for('create') }}">
+<form method="post" action="{{ url_for('create') }}" data-loading="Creating playlist…">
   <input type="hidden" name="setlist_id" value="{{ result.setlist_id }}">
   <input type="hidden" name="url" value="{{ result.show.url }}">
   <input type="hidden" name="artist" value="{{ result.show.artist }}">
@@ -109,6 +109,4 @@
   {% endfor %}
 </ul>
 {% endif %}
-
-<script src="{{ url_for('static', filename='app.js') }}" defer></script>
 {% endblock %}

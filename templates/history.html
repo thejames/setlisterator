@@ -17,7 +17,8 @@
     <td>{{ e.get("matched", 0) }} added{% if e.get("missing") %}
         <span class="miss">· {{ e.get("missing") }} missing</span>{% endif %}</td>
     <td>
-      <form method="post" action="{{ url_for('preview') }}" style="margin:0">
+      <form method="post" action="{{ url_for('preview') }}" style="margin:0"
+            data-loading="Matching…">
         <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
         <button type="submit">Re-open</button>
       </form>

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<form method="post" action="{{ url_for('preview') }}">
+<form method="post" action="{{ url_for('preview') }}" data-loading="Matching the setlist…">
   <label>setlist.fm URL or ID
     <input name="setlist" autofocus required
            placeholder="https://www.setlist.fm/…  or  6b756686">
