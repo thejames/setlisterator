@@ -220,20 +220,28 @@ published port by editing the `ports:` mapping in `docker-compose.yml`.
 
 ### Install on Unraid
 
-A multi-arch image is published to GHCR by CI on every push to `main`:
-`ghcr.io/thejames/setlisterator:latest` (and `:vX.Y.Z` for tags). To install:
+A public multi-arch image is published to GHCR by CI on every push to `main`:
+`ghcr.io/thejames/setlisterator:latest` (and `:vX.Y.Z` for tags). Unraid's
+*Add Container* **Template** field is a dropdown of templates it already knows —
+you can't paste a URL there — so use one of these:
 
-1. **Docker** → **Add Container**, and in *Template* paste the template URL:
-   `https://raw.githubusercontent.com/thejames/setlisterator/main/unraid/setlisterator.xml`
-   (or just set *Repository* to the image above and configure manually).
-2. Fill in `SETLISTFM_API_KEY`, `PLEX_BASEURL` (e.g. `http://10.0.0.10:32400`),
-   `PLEX_TOKEN`, and the music library; the appdata path maps to `/data` so
-   `history.json` persists.
-3. **Apply**, then open the WebUI on the mapped port (default `5001`).
+**Option A — use the bundled template** (fields pre-filled). Copy
+`unraid/setlisterator.xml` to your Unraid flash drive at
+`/boot/config/plugins/dockerMan/templates-user/` (easiest over the network:
+`\\TOWER\flash\config\plugins\dockerMan\templates-user\setlisterator.xml`). Then
+**Docker → Add Container**, pick **setlisterator** from the *Template* dropdown,
+fill in your keys, **Apply**.
 
-The image's GHCR package must be **Public** to pull without a login — after the
-first CI publish, set it in GitHub → repo **Packages** → *setlisterator* →
-*Package settings* → **Change visibility → Public** (one-time).
+**Option B — configure manually** (no file copy). **Docker → Add Container**,
+leave *Template* blank, and set:
+- *Repository*: `ghcr.io/thejames/setlisterator:latest`
+- *Port*: container `5001` → host `5001`
+- *Path*: container `/data` → host `/mnt/user/appdata/setlisterator`
+- *Variables*: `SETLISTFM_API_KEY`, `PLEX_BASEURL` (e.g.
+  `http://10.0.0.10:32400`), `PLEX_TOKEN`, `PLEX_MUSIC_LIBRARY`
+
+Either way, open the WebUI on the mapped port (default `5001`); `history.json`
+persists in the appdata path.
 
 ## How matching works
 
