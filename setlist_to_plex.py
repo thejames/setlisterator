@@ -43,6 +43,7 @@ Example usage:
 """
 
 import argparse
+import html
 import json
 import logging
 import os
@@ -534,6 +535,59 @@ def should_process(history, setlist_id, force, is_tty, prompt_fn=input):
 
 
 # ---------------------------------------------------------------------------
+# setlist.fm "Songs on Albums": scrape per-song album data from the page
+# (the JSON API only returns song names; the HTML page maps songs to albums)
+# ---------------------------------------------------------------------------
+
+_SETLISTFM_UA = ("Mozilla/5.0 (compatible; setlisterator/1.0; "
+                 "+https://github.com/thejames/setlisterator)")
+
+
+def _parse_album_section(page_html):
+    """Parse a setlist.fm page's 'Songs on Albums' block into
+    {normalized song title -> album}. Songs in the 'Covers' bucket are skipped
+    (no real album). Returns {} if the section isn't present.
+    """
+    start = page_html.find("setlistAlbumStats")
+    if start == -1:
+        return {}
+    section = page_html[start:start + 12000]
+    mapping = {}
+    # Each album is a block beginning with a coloured circle icon, then an
+    # <a rel="nofollow">Album</a>, then its songs link to /stats/songs/ pages.
+    for block in re.split(r"fa fa-circle", section)[1:]:
+        head = re.search(r'rel="nofollow"[^>]*>([^<]+)</a>', block)
+        if not head:
+            continue
+        album = html.unescape(head.group(1)).strip()
+        if not album or album.lower() == "covers":
+            continue
+        for song in re.findall(r'/stats/songs/[^"]*"[^>]*>([^<]+)</a>', block):
+            mapping[normalize_aggressive(html.unescape(song))] = album
+    return mapping
+
+
+def fetch_album_map(url):
+    """Return {normalized song title -> album} scraped from a setlist.fm page.
+
+    Best-effort and fail-soft: any network/HTTP/parse problem yields {} (the
+    album hint is then left to MusicBrainz). Empty url -> {}.
+    """
+    if not url:
+        return {}
+    try:
+        resp = requests.get(url, headers={"User-Agent": _SETLISTFM_UA}, timeout=20)
+    except requests.exceptions.RequestException:
+        return {}
+    if resp.status_code != 200:
+        return {}
+    try:
+        return _parse_album_section(resp.text)
+    except Exception:
+        return {}
+
+
+# ---------------------------------------------------------------------------
 # MusicBrainz: best-guess album for a missing track (free, no API key)
 # ---------------------------------------------------------------------------
 
@@ -591,21 +645,22 @@ def lookup_album(artist, title):
 
 
 def enrich_missing_albums(history, limit=40):
-    """Fill 'album' on history missing_tracks via MusicBrainz, lazily + cached:
-    only items without an 'album' key are looked up, at most ``limit`` per call
-    (bounds page latency; the rest resolve on later loads). Returns True if any
-    entry changed, so the caller can persist.
+    """Fill a still-empty 'album' on history missing_tracks via MusicBrainz —
+    the fallback for tracks setlist.fm's "Songs on Albums" didn't cover. Lazy +
+    cached: only tracks with no album and not yet MB-checked are looked up, at
+    most ``limit`` per call. Returns True if any entry changed.
     """
     changed = False
     done = 0
     for entry in history.values():
         for track in entry.get("missing_tracks", []):
-            if "album" in track:
+            if track.get("album") or track.get("album_checked"):
                 continue
             if done >= limit:
                 return changed
             track["album"] = lookup_album(track.get("artist", ""),
                                           track.get("title", ""))
+            track["album_checked"] = True   # don't re-query a no-match
             changed = True
             done += 1
     return changed
@@ -645,8 +700,10 @@ def print_report(playlist_name, added_count, missing, fuzzy):
     if missing:
         print()
         print(f"MISSING TRACKS ({len(missing)}) — not found in your library:")
-        for pos, artist, title in missing:
-            print(f"  {pos}. {artist} - {title}")
+        for row in missing:
+            pos, artist, title = row[0], row[1], row[2]
+            album = row[3] if len(row) > 3 else ""
+            print(f"  {pos}. {artist} - {title}" + (f"  [{album}]" if album else ""))
 
     if fuzzy:
         print()
@@ -720,6 +777,9 @@ def gather_matches(config, setlist_id, name=None):
             "quality": match.quality,
         }
 
+    # setlist.fm's page maps songs to albums; use it to label missing tracks.
+    album_map = fetch_album_map(show["url"])
+
     matched = []
     missing = []
     fuzzy = []
@@ -728,7 +788,8 @@ def gather_matches(config, setlist_id, name=None):
         candidates = match_candidates(section, title, show["artist"],
                                       artist_tracks)
         if not candidates:
-            missing.append((position, show["artist"], title))
+            missing.append((position, show["artist"], title,
+                            album_map.get(normalize_aggressive(title), "")))
             songs.append({"position": position, "title": title,
                           "matched": False, "artist": show["artist"]})
             logger.info("  ✗ %2d. %s → no match", position, title)
@@ -920,8 +981,9 @@ def backfill_history(config):
         except (SetlistError, PlexError, ValueError) as exc:
             logger.warning("Backfill skipped '%s' (%s).", label, exc)
             continue
-        entry["missing_tracks"] = [{"artist": a, "title": t}
-                                   for (_pos, a, t) in result["missing"]]
+        entry["missing_tracks"] = [
+            {"artist": r[1], "title": r[2], "album": (r[3] if len(r) > 3 else "")}
+            for r in result["missing"]]
         entry["missing"] = len(entry["missing_tracks"])
         logger.info("Backfilled '%s' — %d missing.", label, entry["missing"])
         updated += 1
@@ -1029,8 +1091,9 @@ def main(argv=None):
         "artist": result["show"]["artist"],
         "date": result["show"]["date"],
         "missing": len(result["missing"]),
-        "missing_tracks": [{"artist": a, "title": t}
-                           for (_pos, a, t) in result["missing"]],
+        "missing_tracks": [
+            {"artist": r[1], "title": r[2], "album": (r[3] if len(r) > 3 else "")}
+            for r in result["missing"]],
     }
     try:
         final_name = create_playlist(

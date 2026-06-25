@@ -146,10 +146,10 @@
     <span class="s">not found in your Plex library</span>
   </div>
   <div class="cards">
-    {% for pos, artist, title in result.missing %}
+    {% for pos, artist, title, album in result.missing %}
     <div class="card card-missing missingcard" data-missing data-pos="{{ pos }}">
       <span class="num">{{ '%02d' % pos }}</span>
-      <span class="trunc" style="flex:1">{{ artist }} - {{ title }}</span>
+      <span class="trunc" style="flex:1">{{ artist }} - {{ title }}{% if album %}<span class="sub"> · {{ album }}</span>{% endif %}</span>
       <input type="hidden" name="pick_{{ pos }}" class="pick" value="" disabled>
       <input type="checkbox" name="include" value="{{ pos }}" class="inc" disabled hidden>
       <span class="chosen"></span>

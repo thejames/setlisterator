@@ -50,7 +50,7 @@ def _preview_result():
                  "date": "2026-06-16", "url": "https://setlist.fm/x.html"},
         "playlist_name": "Primus - TD Amp, Charlotte (2026-06-16)",
         "matched": [tommy, jerry],
-        "missing": [(3, "Primus", "Jilly's on Smack")],
+        "missing": [(3, "Primus", "Jilly's on Smack", "Green Naugahyde")],
         "fuzzy": [(2, "Primus - Hello Skinny",
                    "Primus - Hello Skinny / Constantinople")],
         # full setlist in order: both matched songs plus the missing one inline
@@ -339,7 +339,7 @@ def test_preview_disables_create_when_no_matches(client, monkeypatch):
         "setlist_id": "abc", "playlist_name": "Nobody — Nowhere",
         "show": {"artist": "Nobody", "venue": "Nowhere", "city": "X",
                  "date": "2026-01-01", "url": ""},
-        "matched": [], "missing": [(1, "Nobody", "Some Song")], "fuzzy": [],
+        "matched": [], "missing": [(1, "Nobody", "Some Song", "")], "fuzzy": [],
         "songs": [{"position": 1, "title": "Some Song", "matched": False,
                    "artist": "Nobody"}],
     }
