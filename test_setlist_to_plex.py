@@ -471,8 +471,8 @@ def test_backfill_history_fills_count_only_entries(monkeypatch, tmp_path):
     assert m.backfill_history(_CONFIG) == 1
     saved = m.load_history(hist)
     assert saved["stale"]["missing_tracks"] == [
-        {"artist": "Stale Artist", "title": "Song One", "album": ""},
-        {"artist": "Stale Artist", "title": "Song Two", "album": ""}]
+        {"position": 1, "artist": "Stale Artist", "title": "Song One", "album": ""},
+        {"position": 2, "artist": "Stale Artist", "title": "Song Two", "album": ""}]
     assert saved["stale"]["missing"] == 2
     assert saved["done"]["missing_tracks"] == [{"artist": "A", "title": "B"}]
     assert "missing_tracks" not in saved["complete"]
@@ -818,13 +818,73 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     assert name == "Phish - MSG"
     assert fake.created[0] == "Phish - MSG"
     assert len(fake.created[1]) == 2          # two tracks fetched + added
-    assert "u" in fake._playlists[-1].summary  # setlist.fm url in the summary
+    summary = fake._playlists[-1].summary       # rich, self-contained record
+    assert "2 of 3 songs added." in summary      # 2 added + 1 missing
+    assert "Missing (1):" in summary
+    assert "Destiny Unbound" in summary
+    assert "Source: u" in summary                # setlist.fm url in the summary
     saved = m.load_history(hist)
     assert saved["abc123"]["playlist_name"] == "Phish - MSG"
     assert saved["abc123"]["matched"] == 2
     assert saved["abc123"]["playlist_rating_key"] == 999   # key stored for update
     assert saved["abc123"]["missing_tracks"] == [
         {"artist": "Phish", "title": "Destiny Unbound"}]
+
+
+def test_playlist_summary_full_record():
+    summary = m._playlist_summary(
+        {"url": "https://www.setlist.fm/x",
+         "missing_tracks": [
+             {"position": 4, "artist": "Primus", "title": "The Ol' Grizz",
+              "album": "A Handful of Nuggs"},
+             {"position": 11, "artist": "Primus", "title": "Hello Skinny"}]},
+        added_count=10)
+    assert summary.splitlines() == [
+        "10 of 12 songs added.",
+        "",
+        "Missing (2):",
+        "  • #4 The Ol' Grizz — A Handful of Nuggs",   # setlist position shown
+        "  • #11 Hello Skinny",
+        "",
+        "Source: https://www.setlist.fm/x",
+        "Created by Setlist-er-ator. 🤘",
+    ]
+
+
+def test_playlist_summary_full_run_when_complete():
+    summary = m._playlist_summary({"url": "u", "missing_tracks": []}, added_count=14)
+    assert summary.splitlines() == [
+        "14 of 14 songs added.",
+        "",
+        "This is the full run of the show.",
+        "",
+        "Source: u",
+        "Created by Setlist-er-ator. 🤘",
+    ]
+
+
+def test_playlist_summary_singular_grammar():
+    # One song, and it's missing -> singular "song", no full-run line.
+    summary = m._playlist_summary(
+        {"url": "u", "missing_tracks": [{"position": 1, "title": "Lonely"}]}, 0)
+    assert summary.startswith("0 of 1 song added.")
+    assert "  • #1 Lonely" in summary
+
+
+def test_playlist_summary_header_matches_rendered_bullets():
+    # A title-less missing entry is skipped; the "Missing (N)" header must count
+    # only the bullets actually rendered, not the raw missing length.
+    summary = m._playlist_summary(
+        {"missing_tracks": [{"artist": "A", "title": "Real Song"},
+                            {"artist": "A", "title": ""}]},
+        added_count=3)
+    assert "Missing (1):" in summary
+    assert summary.count("  • ") == 1
+
+
+def test_playlist_summary_empty_meta_is_blank():
+    assert m._playlist_summary(None, 5) == ""
+    assert m._playlist_summary({}, 5) == ""
 
 
 def test_create_playlist_no_history_when_meta_none(monkeypatch, tmp_path):

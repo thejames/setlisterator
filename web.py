@@ -207,9 +207,9 @@ def _history_meta_from_form(setlist_id):
         "artist": request.form.get("artist", ""),
         "date": request.form.get("date", ""),
         "missing": len(missing),
-        # missing rows are [position, artist, title, album?]; carry the album.
+        # missing rows are [position, artist, title, album?]; carry position+album.
         "missing_tracks": [
-            {"artist": row[1], "title": row[2],
+            {"position": row[0], "artist": row[1], "title": row[2],
              "album": (row[3] if len(row) > 3 else "")}
             for row in missing if len(row) >= 3],
     }

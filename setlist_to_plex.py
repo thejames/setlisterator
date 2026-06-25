@@ -852,6 +852,43 @@ def _record_history(playlist_name, playlist_rating_key, matched_count,
         logger.warning("Could not write history at %s (%s).", hist_file, exc)
 
 
+def _playlist_summary(history_meta, added_count):
+    """Build the Plex playlist summary text from show metadata.
+
+    A self-contained record: how many of the setlist's songs made it in, the
+    missing tracks with their likely albums (a built-in buy-list for the show),
+    and the setlist.fm source link. Returns "" when there's nothing useful to
+    say (no history_meta), so the caller can skip the summary entirely.
+    """
+    meta = history_meta or {}
+    if not meta:
+        return ""
+    missing = meta.get("missing_tracks", []) or []
+    total = added_count + len(missing)
+    lines = [f"{added_count} of {total} song{'' if total == 1 else 's'} added."]
+
+    # Only tracks with a title render as bullets; count the header off those so
+    # "Missing (N):" always matches the number of lines that follow.
+    renderable = [t for t in missing if (t.get("title") or "").strip()]
+    if total and not missing:
+        lines += ["", "This is the full run of the show."]
+    elif renderable:
+        lines += ["", f"Missing ({len(renderable)}):"]
+        for track in renderable:
+            title = track["title"].strip()
+            album = (track.get("album") or "").strip()
+            pos = track.get("position")
+            head = f"#{pos} {title}" if pos else title   # setlist position
+            lines.append(f"  • {head} — {album}" if album
+                         else f"  • {head}")
+
+    url = meta.get("url")
+    if url:
+        lines += ["", f"Source: {url}"]
+    lines.append("Created by Setlist-er-ator. 🤘")
+    return "\n".join(lines)
+
+
 def create_playlist(config, name, rating_keys, history_meta=None):
     """Create a Plex playlist from track rating keys and record history.
 
@@ -888,12 +925,13 @@ def create_playlist(config, name, rating_keys, history_meta=None):
     except plex_exceptions.PlexApiException as exc:
         raise PlexError(f"Failed to create playlist: {exc}") from exc
 
-    # Record the setlist.fm link in the Plex playlist's summary. Fail-soft so a
-    # summary hiccup never undoes a created playlist.
-    url = (history_meta or {}).get("url")
-    if url:
+    # Record a self-contained summary (counts, missing-with-albums, source link)
+    # on the Plex playlist. Fail-soft so a summary hiccup never undoes a created
+    # playlist.
+    summary = _playlist_summary(history_meta, len(tracks))
+    if summary:
         try:
-            playlist.editSummary(f"{url}\n\nCreated by Setlist-er-ator.")
+            playlist.editSummary(summary)
         except Exception as exc:
             logger.warning("Could not set playlist summary (%s).", exc)
 
@@ -992,7 +1030,8 @@ def backfill_history(config):
             logger.warning("Backfill skipped '%s' (%s).", label, exc)
             continue
         entry["missing_tracks"] = [
-            {"artist": r[1], "title": r[2], "album": (r[3] if len(r) > 3 else "")}
+            {"position": r[0], "artist": r[1], "title": r[2],
+             "album": (r[3] if len(r) > 3 else "")}
             for r in result["missing"]]
         entry["missing"] = len(entry["missing_tracks"])
         logger.info("Backfilled '%s' — %d missing.", label, entry["missing"])
@@ -1102,7 +1141,8 @@ def main(argv=None):
         "date": result["show"]["date"],
         "missing": len(result["missing"]),
         "missing_tracks": [
-            {"artist": r[1], "title": r[2], "album": (r[3] if len(r) > 3 else "")}
+            {"position": r[0], "artist": r[1], "title": r[2],
+             "album": (r[3] if len(r) > 3 else "")}
             for r in result["missing"]],
     }
     try:

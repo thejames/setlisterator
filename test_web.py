@@ -384,6 +384,7 @@ def test_create_builds_playlist(client, monkeypatch):
     assert resp.status_code == 200
     assert captured["keys"] == ["10", "21"]   # picks honored in position order
     assert captured["meta"]["missing"] == 1
+    assert captured["meta"]["missing_tracks"][0]["position"] == 3   # carried for summary
     body = resp.data.decode()
     assert "Primus - TD Amp (2)" in body         # final (suffixed) name shown
     assert "Jilly&#39;s on Smack" in body        # buy-list persisted
