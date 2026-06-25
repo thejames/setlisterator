@@ -12,10 +12,10 @@ COPY setlist_to_plex.py web.py ./
 COPY templates/ templates/
 COPY static/ static/
 
-# Run as a non-root user; history lives in a mounted volume.
-RUN useradd --create-home app \
-    && mkdir -p /data && chown app:app /data
-USER app
+# Runs as root so it can write to a bind-mounted Unraid appdata share
+# (typically owned by nobody:users) — the standard Unraid container pattern.
+# History lives in a mounted volume.
+RUN mkdir -p /data
 ENV SETLIST_TO_PLEX_HISTORY=/data/history.json
 
 EXPOSE 5001
