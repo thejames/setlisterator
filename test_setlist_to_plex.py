@@ -748,6 +748,61 @@ def test_load_config_ok(monkeypatch):
     assert config["api_key"] == "k" and config["music_library"] == "Music"
 
 
+# --- album preference (prefer a cohesive album, e.g. a live recording) -----
+
+def test_prefer_album_first_floats_within_tier():
+    # Same title on two albums (both exact) -> preferred floats up; with no
+    # preference the order is just match order (unchanged behavior).
+    tracks = [
+        _FakeTrack("Tommy the Cat", "Primus", rating_key=1, album="Sailing"),
+        _FakeTrack("Tommy the Cat", "Primus", rating_key=2, album="Live@ Sun Dome"),
+    ]
+    cands = m.match_candidates(_FakeSection(), "Tommy the Cat", "Primus", tracks)
+    assert [c.track.ratingKey for c in cands] == [1, 2]
+    assert m._prefer_album_first(cands, "")[0].track.ratingKey == 1   # no bias
+    assert m._prefer_album_first(cands, "Live@ Sun Dome")[0].track.ratingKey == 2
+
+
+def test_prefer_album_first_outranks_title_tier():
+    # A live album's titles span tiers; a preferred loose/prefix match must beat
+    # a non-preferred exact. Loose (tier 1) stays ahead of prefix (tier 3).
+    tracks = [
+        _FakeTrack("Tommy the Cat", "Primus", rating_key=1, album="Sailing"),
+        _FakeTrack("Tommy the Cat (Live)", "Primus", rating_key=2, album="Live@ Sun Dome"),
+        _FakeTrack("Tommy the Cat - Live at USF", "Primus", rating_key=3, album="Live@ Sun Dome"),
+    ]
+    cands = m.match_candidates(_FakeSection(), "Tommy the Cat", "Primus", tracks)
+    pref = m._prefer_album_first(cands, "Live@ Sun Dome")
+    assert pref[0].track.ratingKey == 2
+    assert pref[0].track.parentTitle == "Live@ Sun Dome"
+
+
+def test_prefer_album_first_does_not_promote_medley():
+    # A medley on the preferred album must NOT beat a clean exact single.
+    tracks = [
+        _FakeTrack("Tommy the Cat", "Primus", rating_key=1, album="Sailing"),
+        _FakeTrack("Tommy the Cat / Frizzle Fry", "Primus", rating_key=2, album="Live@ Sun Dome"),
+    ]
+    cands = m.match_candidates(_FakeSection(), "Tommy the Cat", "Primus", tracks)
+    assert m._prefer_album_first(cands, "Live@ Sun Dome")[0].track.ratingKey == 1
+
+
+def test_album_coverage_counts_and_orders():
+    per_song = [{"Live@ Sun Dome", "Sailing"}, {"Live@ Sun Dome"},
+                {"Live@ Sun Dome", "Frizzle Fry"}]
+    cov = m._album_coverage(per_song)
+    assert cov[0] == {"album": "Live@ Sun Dome", "songs": 3}
+    assert {c["album"] for c in cov} == {"Live@ Sun Dome", "Sailing", "Frizzle Fry"}
+
+
+def test_auto_album_threshold():
+    assert m._auto_album([{"album": "Live", "songs": 3},
+                          {"album": "Studio", "songs": 1}], 4) == "Live"
+    assert m._auto_album([{"album": "X", "songs": 2}], 6) == ""   # below fraction
+    assert m._auto_album([{"album": "X", "songs": 2}], 2) == ""   # too few songs
+    assert m._auto_album([], 5) == ""
+
+
 def _gather_setlist_data():
     return {
         "artist": {"name": "Phish"},
@@ -802,6 +857,64 @@ def test_gather_matches_attaches_multiple_candidates(monkeypatch):
     assert wilson["title"] == "Wilson"
     assert [c["rating_key"] for c in wilson["candidates"]] == [10, 99]
     assert wilson["rating_key"] == 10   # default mirrors the best candidate
+
+
+def test_gather_matches_explicit_prefer_album(monkeypatch):
+    # Wilson exists on two albums; an explicit preference picks that version.
+    library = [
+        _FakeTrack("Wilson", "Phish", rating_key=10, album="Junta"),
+        _FakeTrack("Wilson", "Phish", rating_key=99, album="A Live One"),
+        _FakeTrack("Tweezer (Reprise)", "Phish", rating_key=11, album="A Live One"),
+    ]
+    _wire_gather(monkeypatch, library)
+    result = m.gather_matches(_CONFIG, "abc123", prefer_album="A Live One")
+    assert result["preferred_album"] == "A Live One"
+    assert result["matched"][0]["rating_key"] == 99   # Wilson from preferred album
+    assert any(o["album"] == "A Live One" for o in result["album_options"])
+
+
+def test_gather_matches_auto_detects_cohesive_album(monkeypatch):
+    # A full live recording covers the whole setlist -> auto-preferred, so every
+    # tie resolves to it even though studio versions exist on other albums.
+    songs = ["Those Damned Blue-Collar Tweekers", "Tommy the Cat",
+             "Jerry Was a Race Car Driver", "Wynona's Big Brown Beaver"]
+    setlist = {
+        "artist": {"name": "Primus"},
+        "venue": {"name": "USF Sun Dome", "city": {"name": "Tampa"}},
+        "eventDate": "16-06-1992", "url": "https://setlist.fm/x.html",
+        "sets": {"set": [{"song": [{"name": s} for s in songs]}]},
+    }
+    LIVE = "Live@ USF Sun Dome, Tampa FL"
+    # Studio versions FIRST in library order, so without the album preference
+    # those would win — proving the cohesion re-order actually moves the pick.
+    library = [
+        _FakeTrack("Tommy the Cat", "Primus", rating_key=50, album="Sailing the Seas of Cheese"),
+        _FakeTrack("Jerry Was a Race Car Driver", "Primus", rating_key=51, album="Frizzle Fry"),
+    ]
+    library += [_FakeTrack(s, "Primus", rating_key=i, album=LIVE)
+                for i, s in enumerate(songs, start=1)]
+    monkeypatch.setattr(m, "fetch_setlist", lambda sid, key: setlist)
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: object())
+    section = _FakeSection(artists=[_FakeArtist("Primus", library)])
+    monkeypatch.setattr(m, "get_music_section", lambda plex, lib: section)
+    monkeypatch.setattr(m, "fetch_album_map", lambda url: {})
+
+    result = m.gather_matches(_CONFIG, "abc123")   # prefer_album=None -> auto
+    assert result["preferred_album"] == LIVE
+    assert result["album_options"][0]["album"] == LIVE
+    assert all(row["album"] == LIVE for row in result["matched"])
+
+
+def test_gather_matches_empty_prefer_album_forces_no_preference(monkeypatch):
+    library = [
+        _FakeTrack("Wilson", "Phish", rating_key=10, album="Junta"),
+        _FakeTrack("Wilson", "Phish", rating_key=99, album="A Live One"),
+        _FakeTrack("Tweezer (Reprise)", "Phish", rating_key=11, album="A Live One"),
+    ]
+    _wire_gather(monkeypatch, library)
+    result = m.gather_matches(_CONFIG, "abc123", prefer_album="")
+    assert result["preferred_album"] == ""
+    assert result["matched"][0]["rating_key"] == 10   # library order, no bias
 
 
 # --- match_candidates ------------------------------------------------------

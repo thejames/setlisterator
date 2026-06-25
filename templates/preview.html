@@ -20,6 +20,26 @@
 </div>
 {% endif %}
 
+{% if result.album_options %}
+<form method="post" action="{{ url_for('preview') }}" data-loading="Re-matching…"
+      style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap">
+  <input type="hidden" name="setlist" value="{{ result.show.url or result.setlist_id }}">
+  <input type="hidden" name="name" value="{{ result.playlist_name }}">
+  <label for="prefer_album" style="font-weight:600;font-size:13px">Prefer album</label>
+  <select name="prefer_album" id="prefer_album" data-album-select
+          style="background:var(--panel2);color:var(--text);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;font:inherit">
+    <option value=""{% if not result.preferred_album %} selected{% endif %}>No preference</option>
+    {% for a in result.album_options %}
+    <option value="{{ a.album }}"{% if a.album == result.preferred_album %} selected{% endif %}>{{ a.album }} ({{ a.songs }} song{{ '' if a.songs == 1 else 's' }})</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="btn-sm">Apply</button>
+  {% if result.preferred_album %}
+  <span class="sub">picking this album wherever a song is on it</span>
+  {% endif %}
+</form>
+{% endif %}
+
 <form method="post" action="{{ url_for('create') }}" data-loading="Creating playlist…">
   <input type="hidden" name="setlist_id" value="{{ result.setlist_id }}">
   <input type="hidden" name="url" value="{{ result.show.url }}">

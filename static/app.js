@@ -94,6 +94,15 @@
     });
   });
 
+  // Prefer-album select: re-match on change. No-JS users use the Apply button.
+  // requestSubmit() fires the submit event so the data-loading spinner runs.
+  document.querySelectorAll("[data-album-select]").forEach(function (sel) {
+    sel.addEventListener("change", function () {
+      if (sel.form.requestSubmit) sel.form.requestSubmit();
+      else sel.form.submit();
+    });
+  });
+
   document.querySelectorAll("[data-missing]").forEach(function (card) {
     const go = card.querySelector(".go");
     const q = card.querySelector(".q");

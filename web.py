@@ -172,13 +172,16 @@ def preview():
     """Match the setlist and show the result without creating anything."""
     setlist_arg = (request.form.get("setlist") or "").strip()
     name = (request.form.get("name") or "").strip() or None
+    # Absent (first preview) -> None -> auto-detect a cohesive album; present
+    # (incl. "" for "No preference") -> use it verbatim.
+    prefer_album = request.form.get("prefer_album")
     if not setlist_arg:
         return _error("Missing input", "Enter a setlist.fm URL or ID.", 400)
 
     try:
         config = core.load_config()
         setlist_id = core.parse_setlist_id(setlist_arg)
-        result = core.gather_matches(config, setlist_id, name)
+        result = core.gather_matches(config, setlist_id, name, prefer_album)
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
     except ValueError as exc:

@@ -443,6 +443,24 @@ def _best_match(target_simple, target_aggr, tracks, setlist_artist, scoped):
     return ranked[0] if ranked else None
 
 
+def _prefer_album_first(candidates, prefer_album):
+    """Stable-reorder a Match list so matches on ``prefer_album`` lead.
+
+    A preferred-album match outranks title tier — a live recording's titles span
+    tiers (exact "Tommy the Cat", loose "...(Live)", prefix "...- Live at X") —
+    but a *medley* is never floated this way (it would grab the wrong track over
+    a clean single). The sort is stable, so within the preferred and the
+    non-preferred group the existing tier order is kept. ``prefer_album`` is an
+    exact Plex album title, so a case-insensitive equality compare suffices.
+    """
+    if not prefer_album:
+        return candidates
+    want = prefer_album.strip().lower()
+    return sorted(candidates, key=lambda c: 0 if (
+        c.tier != "medley" and _track_album(c.track).strip().lower() == want)
+        else 1)
+
+
 def resolve_artist(section, setlist_artist):
     """Find the library Artist matching the setlist artist, or None."""
     try:
@@ -480,7 +498,8 @@ def match_candidates(section, title, setlist_artist, artist_tracks, limit=5):
     tokenizer, which can miss tracks over punctuation/Unicode quirks. Only if
     that finds nothing do we fall back to a global title search, which also
     covers songs performed as covers of other artists. Each item is a
-    Match(track, quality, tier, source).
+    Match(track, quality, tier, source). (Album preference is applied separately
+    by the caller via _prefer_album_first, so this stays single-purpose.)
     """
     target_simple = normalize_simple(title)
     target_aggr = normalize_aggressive(title)
@@ -516,6 +535,44 @@ def match_song(section, title, setlist_artist, artist_tracks):
     """
     candidates = match_candidates(section, title, setlist_artist, artist_tracks)
     return candidates[0] if candidates else None
+
+
+# A cohesive album must cover at least this share of the setlist's matched songs
+# (and a small absolute minimum) before it's auto-preferred — so an incidental
+# shared album doesn't bias an ordinary setlist, but a full live recording does.
+ALBUM_COHESION_MIN_FRACTION = 0.5
+ALBUM_COHESION_MIN_SONGS = 3
+
+
+def _album_coverage(per_song_albums):
+    """Tally how many setlist songs each album can supply, highest first.
+
+    ``per_song_albums`` is one entry per matched song: the set of (non-medley)
+    album titles that song matched on. Returns [{"album", "songs"}, ...] sorted
+    by coverage descending, then album title.
+    """
+    counts = {}
+    for albums in per_song_albums:
+        for album in albums:
+            counts[album] = counts.get(album, 0) + 1
+    return [{"album": album, "songs": n} for album, n in
+            sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))]
+
+
+def _auto_album(album_options, total_matched):
+    """The dominant album worth auto-preferring, or '' if none is cohesive.
+
+    Picks the top-coverage album only when it covers a strong share of the
+    matched songs (a recording of the whole show), so ordinary setlists — where
+    songs are spread across many studio albums — get no bias.
+    """
+    if not album_options or total_matched < ALBUM_COHESION_MIN_SONGS:
+        return ""
+    top = album_options[0]
+    if (top["songs"] >= ALBUM_COHESION_MIN_SONGS
+            and top["songs"] >= ALBUM_COHESION_MIN_FRACTION * total_matched):
+        return top["album"]
+    return ""
 
 
 def unique_playlist_name(plex, name):
@@ -778,7 +835,7 @@ def print_report(playlist_name, added_count, missing, fuzzy):
 # Core pipeline (shared by the CLI and the web app)
 # ---------------------------------------------------------------------------
 
-def gather_matches(config, setlist_id, name=None):
+def gather_matches(config, setlist_id, name=None, prefer_album=None):
     """Fetch a setlist and match every song against the Plex library.
 
     Read-only: no playlist is created. Returns a dict with the show metadata,
@@ -786,6 +843,12 @@ def gather_matches(config, setlist_id, name=None):
     entries are deduped and carry the Plex track rating key so a playlist can
     be built later without re-matching). Raises SetlistError or PlexError (with
     a human-readable message) on failure.
+
+    ``prefer_album`` biases which version of a song is chosen when it exists on
+    several albums: ``None`` auto-detects a cohesive album (e.g. a live recording
+    of the whole show) and prefers it; ``""`` forces no preference; a non-empty
+    title prefers that album. The chosen album and the available album options
+    (by coverage) are returned as ``preferred_album`` / ``album_options``.
     """
     try:
         data = fetch_setlist(setlist_id, config["api_key"])
@@ -836,13 +899,37 @@ def gather_matches(config, setlist_id, name=None):
     # setlist.fm's page maps songs to albums; use it to label missing tracks.
     album_map = fetch_album_map(show["url"])
 
+    # Pass 1: match once with no album preference, both to measure which album
+    # covers the most of the setlist (cohesion) and to reuse as the result.
+    # limit=10 so several album versions of a song are retained for re-ordering.
+    first_pass = [(position, title,
+                   match_candidates(section, title, show["artist"],
+                                    artist_tracks, limit=10))
+                  for position, title in enumerate(show["songs"], start=1)]
+    per_song_albums = [
+        {_track_album(c.track) for c in cands
+         if c.tier != "medley" and _track_album(c.track)}
+        for _, _, cands in first_pass if cands]
+    album_options = _album_coverage(per_song_albums)
+
+    if prefer_album is None:                  # auto-detect a cohesive album
+        preferred_album = _auto_album(album_options, len(per_song_albums))
+    else:                                     # explicit ("" forces no preference)
+        preferred_album = prefer_album or ""
+    if preferred_album:
+        logger.info("Album:   preferring %r", preferred_album)
+
+    # Apply the preference by re-ordering each song's pass-1 candidates in memory
+    # (no second Plex search), then trim to the usual 5 shown per song.
+    per_song = [(position, title,
+                 _prefer_album_first(cands, preferred_album)[:5])
+                for position, title, cands in first_pass]
+
     matched = []
     missing = []
     fuzzy = []
     songs = []   # the full setlist in order, each row flagged matched or not
-    for position, title in enumerate(show["songs"], start=1):
-        candidates = match_candidates(section, title, show["artist"],
-                                      artist_tracks)
+    for position, title, candidates in per_song:
         if not candidates:
             missing.append((position, show["artist"], title,
                             album_map.get(normalize_aggressive(title), "")))
@@ -876,6 +963,8 @@ def gather_matches(config, setlist_id, name=None):
         "matched": matched,
         "missing": missing,
         "fuzzy": fuzzy,
+        "preferred_album": preferred_album,
+        "album_options": album_options,
     }
 
 

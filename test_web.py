@@ -225,7 +225,7 @@ def test_index_config_error(client, monkeypatch):
 
 def test_preview_renders_matches(client, monkeypatch):
     monkeypatch.setattr(core, "gather_matches",
-                        lambda cfg, sid, name=None: _preview_result())
+                        lambda cfg, sid, name=None, prefer_album=None: _preview_result())
     monkeypatch.setattr(core, "load_history", lambda path: {})
     resp = client.post("/preview", data={"setlist": "abc123"})
     assert resp.status_code == 200
@@ -271,7 +271,7 @@ def test_preview_requires_input(client):
 
 def test_preview_missing_row_has_search_ui(client, monkeypatch):
     monkeypatch.setattr(core, "gather_matches",
-                        lambda cfg, sid, name=None: _preview_result())
+                        lambda cfg, sid, name=None, prefer_album=None: _preview_result())
     monkeypatch.setattr(core, "load_history", lambda path: {})
     body = client.post("/preview", data={"setlist": "abc"}).data.decode()
     # the missing row gets a search box + disabled pick/include the JS fills
@@ -343,7 +343,8 @@ def test_preview_disables_create_when_no_matches(client, monkeypatch):
         "songs": [{"position": 1, "title": "Some Song", "matched": False,
                    "artist": "Nobody"}],
     }
-    monkeypatch.setattr(core, "gather_matches", lambda c, s, n=None: all_missing)
+    monkeypatch.setattr(core, "gather_matches",
+                        lambda c, s, n=None, prefer_album=None: all_missing)
     monkeypatch.setattr(core, "load_history", lambda p: {})
     body = client.post("/preview", data={"setlist": "abc"}).data.decode()
     assert "disabled>Nothing in your library to add" in body
@@ -351,7 +352,7 @@ def test_preview_disables_create_when_no_matches(client, monkeypatch):
 
 
 def test_preview_setlist_error(client, monkeypatch):
-    def boom(cfg, sid, name=None):
+    def boom(cfg, sid, name=None, prefer_album=None):
         raise core.SetlistError("No setlist found with ID 'abc123'.")
     monkeypatch.setattr(core, "gather_matches", boom)
     resp = client.post("/preview", data={"setlist": "abc123"})
@@ -423,6 +424,41 @@ def test_create_added_count_is_deduped(client, monkeypatch):
     })
     body = resp.data.decode()
     assert "2 tracks added" in body   # deduped: {10, 21}, not 3
+
+
+def test_preview_prefer_album_forwarded_and_rendered(client, monkeypatch):
+    captured = {}
+
+    def fake_gather(cfg, sid, name=None, prefer_album=None):
+        captured["prefer_album"] = prefer_album
+        result = _preview_result()
+        result["preferred_album"] = "Live@ Sun Dome"
+        result["album_options"] = [{"album": "Live@ Sun Dome", "songs": 5},
+                                   {"album": "Studio", "songs": 2}]
+        return result
+
+    monkeypatch.setattr(core, "gather_matches", fake_gather)
+    monkeypatch.setattr(core, "load_history", lambda path: {})
+    body = client.post("/preview", data={
+        "setlist": "abc", "prefer_album": "Live@ Sun Dome"}).data.decode()
+    assert captured["prefer_album"] == "Live@ Sun Dome"      # forwarded to core
+    assert 'name="prefer_album"' in body                     # the select is shown
+    assert "Live@ Sun Dome (5 songs)" in body                # option with coverage
+    assert 'value="Live@ Sun Dome" selected' in body         # pre-selected
+
+
+def test_preview_first_load_auto_detects_album(client, monkeypatch):
+    # No prefer_album in the form -> None reaches core (auto-detect).
+    captured = {}
+
+    def fake_gather(cfg, sid, name=None, prefer_album=None):
+        captured["prefer_album"] = prefer_album
+        return _preview_result()
+
+    monkeypatch.setattr(core, "gather_matches", fake_gather)
+    monkeypatch.setattr(core, "load_history", lambda path: {})
+    client.post("/preview", data={"setlist": "abc"})
+    assert captured["prefer_album"] is None
 
 
 # --- /attended (browse a user's "I was there" shows) -----------------------
