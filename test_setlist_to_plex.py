@@ -595,16 +595,22 @@ _ALBUM_HTML = """
   <div style="display:none"><ul>
     <li><a href="../../../stats/songs/p.html?songid=9" title="Statistics for Hello Skinny performed by Primus">Hello Skinny</a></li>
   </ul></div></li>
+<li><div><i class="fa fa-circle" style="color:#bbb;"></i>
+  <a href="javascript:void(0);" rel="nofollow">Others</a> <span>1</span></div>
+  <div style="display:none"><ul>
+    <li><a href="../../../stats/songs/p.html?songid=8" title="Statistics for B-Side Jam performed by Primus">B-Side Jam</a></li>
+  </ul></div></li>
 </ul></div>
 """
 
 
-def test_parse_album_section_maps_songs_and_skips_covers():
+def test_parse_album_section_maps_songs_and_skips_buckets():
     mp = m._parse_album_section(_ALBUM_HTML)
     assert mp[m.normalize_aggressive("Groundhog's Day")] == "Frizzle Fry"
     assert mp[m.normalize_aggressive("Harold of the Rocks")] == "Frizzle Fry"
-    # Covers bucket is skipped -> Hello Skinny not mapped
+    # "Covers" and "Others" are non-album buckets -> their songs aren't mapped
     assert m.normalize_aggressive("Hello Skinny") not in mp
+    assert m.normalize_aggressive("B-Side Jam") not in mp
 
 
 def test_parse_album_section_absent_returns_empty():

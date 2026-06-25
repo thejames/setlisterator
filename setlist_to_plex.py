@@ -560,7 +560,8 @@ def _parse_album_section(page_html):
         if not head:
             continue
         album = html.unescape(head.group(1)).strip()
-        if not album or album.lower() == "covers":
+        # "Covers" and "Others" are setlist.fm's non-album buckets, not albums.
+        if not album or album.lower() in ("covers", "others"):
             continue
         for song in re.findall(r'/stats/songs/[^"]*"[^>]*>([^<]+)</a>', block):
             mapping[normalize_aggressive(html.unescape(song))] = album
