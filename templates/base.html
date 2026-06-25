@@ -120,8 +120,11 @@
     /* Track table: fixed layout so long <select> options / text can't widen
        columns past the panel. Cells clip; selects fill their cell. */
     .tracktable { table-layout: fixed; }
-    .tracktable td { overflow: hidden; }
+    /* No overflow:hidden on cells — it would clip the open match dropdown.
+       The .trunc spans below handle text truncation instead. */
     .tracktable select { width: 100%; max-width: 100%; }
+    /* Let the dropdown escape the panel that wraps a track table. */
+    .panel:has(.tracktable) { overflow: visible; }
     .trunc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     /* Missing-row manual search: field + button on one row, equal height. */
     .searchrow { display: flex; align-items: stretch; gap: 8px; margin-top: 6px; }
@@ -212,9 +215,11 @@
     .dd-title { display: block; font-size: 14px; color: var(--text); }
     .dd-sub { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); }
     .dd-caret { color: var(--muted); font-size: 11px; flex: none; }
-    .dd-menu { position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 60;
+    .dd-menu { position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 100;
       background: #1B1B21; border: 1px solid var(--border2); border-radius: 10px;
       box-shadow: 0 16px 40px rgba(0,0,0,.55); padding: 5px; }
+    /* The open dropdown's cell stacks above later rows. */
+    .tracktable td:has(.dd-btn.open) { position: relative; z-index: 50; }
     .dd-opt { width: 100%; text-align: left; display: block; border: none;
       background: transparent; border-radius: 7px; padding: 9px 10px; }
     .dd-opt:hover, .dd-opt.sel { background: #23232B; }
