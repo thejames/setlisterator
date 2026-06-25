@@ -471,8 +471,8 @@ def test_backfill_history_fills_count_only_entries(monkeypatch, tmp_path):
     assert m.backfill_history(_CONFIG) == 1
     saved = m.load_history(hist)
     assert saved["stale"]["missing_tracks"] == [
-        {"artist": "Stale Artist", "title": "Song One"},
-        {"artist": "Stale Artist", "title": "Song Two"}]
+        {"artist": "Stale Artist", "title": "Song One", "album": ""},
+        {"artist": "Stale Artist", "title": "Song Two", "album": ""}]
     assert saved["stale"]["missing"] == 2
     assert saved["done"]["missing_tracks"] == [{"artist": "A", "title": "B"}]
     assert "missing_tracks" not in saved["complete"]
@@ -558,6 +558,83 @@ def test_enrich_missing_albums_respects_limit(monkeypatch):
     assert sum("album" in t for t in history["e"]["missing_tracks"]) == 2
 
 
+def test_enrich_skips_when_album_already_set(monkeypatch):
+    # setlist.fm already supplied the album -> MusicBrainz isn't consulted.
+    calls = []
+    monkeypatch.setattr(m, "lookup_album", lambda a, t: calls.append(1) or "MB")
+    history = {"e": {"missing_tracks": [{"artist": "A", "title": "B",
+                                         "album": "From setlist.fm"}]}}
+    assert m.enrich_missing_albums(history) is False
+    assert calls == []                                    # no MB lookup
+
+
+def test_enrich_caches_musicbrainz_no_match(monkeypatch):
+    # Empty album -> MB tried once; a no-match is cached (album_checked).
+    calls = []
+    monkeypatch.setattr(m, "lookup_album", lambda a, t: calls.append(1) or "")
+    history = {"e": {"missing_tracks": [{"artist": "A", "title": "B"}]}}
+    assert m.enrich_missing_albums(history) is True
+    assert history["e"]["missing_tracks"][0]["album_checked"] is True
+    assert m.enrich_missing_albums(history) is False
+    assert len(calls) == 1
+
+
+# --- setlist.fm "Songs on Albums" scrape ------------------------------------
+
+_ALBUM_HTML = """
+<div class="setlistAlbumStats"><div class="col-xs-12"><h2>Songs on Albums</h2></div>
+<ul class="noList listStriped listPadding">
+<li><div><i class="fa fa-circle" style="color:#85B146;"></i>
+  <a href="javascript:void(0);" id="id11" rel="nofollow">Frizzle Fry</a> <span>2</span></div>
+  <div id="id12" style="display:none"><ul>
+    <li><a href="../../../stats/songs/p.html?songid=1" title="Statistics for Groundhog's Day performed by Primus">Groundhog's Day</a></li>
+    <li><a href="../../../stats/songs/p.html?songid=2" title="Statistics for Harold of the Rocks performed by Primus">Harold of the Rocks</a></li>
+  </ul></div></li>
+<li><div><i class="fa fa-circle" style="color:#aaa;"></i>
+  <a href="javascript:void(0);" rel="nofollow">Covers</a> <span>1</span></div>
+  <div style="display:none"><ul>
+    <li><a href="../../../stats/songs/p.html?songid=9" title="Statistics for Hello Skinny performed by Primus">Hello Skinny</a></li>
+  </ul></div></li>
+</ul></div>
+"""
+
+
+def test_parse_album_section_maps_songs_and_skips_covers():
+    mp = m._parse_album_section(_ALBUM_HTML)
+    assert mp[m.normalize_aggressive("Groundhog's Day")] == "Frizzle Fry"
+    assert mp[m.normalize_aggressive("Harold of the Rocks")] == "Frizzle Fry"
+    # Covers bucket is skipped -> Hello Skinny not mapped
+    assert m.normalize_aggressive("Hello Skinny") not in mp
+
+
+def test_parse_album_section_absent_returns_empty():
+    assert m._parse_album_section("<html>no such section</html>") == {}
+
+
+def test_fetch_album_map_fail_soft(monkeypatch):
+    assert m.fetch_album_map("") == {}                     # no url
+    class _R:
+        status_code = 200
+        text = _ALBUM_HTML
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: _R())
+    mp = m.fetch_album_map("https://setlist.fm/x.html")
+    assert mp[m.normalize_aggressive("Groundhog's Day")] == "Frizzle Fry"
+
+    def boom(*a, **k):
+        raise m.requests.exceptions.RequestException("offline")
+    monkeypatch.setattr(m.requests, "get", boom)
+    assert m.fetch_album_map("https://setlist.fm/x.html") == {}   # fail-soft
+
+
+def test_gather_attaches_setlistfm_album(monkeypatch):
+    library = [_FakeTrack("Wilson", "Phish", rating_key=10),
+               _FakeTrack("Tweezer (Reprise)", "Phish", rating_key=11)]
+    _wire_gather(monkeypatch, library,
+                 album_map={m.normalize_aggressive("Some Rarity"): "Rarities LP"})
+    result = m.gather_matches(_CONFIG, "abc123")
+    assert result["missing"] == [(3, "Phish", "Some Rarity", "Rarities LP")]
+
+
 # ---------------------------------------------------------------------------
 # Core pipeline: load_config / gather_matches / create_playlist
 # ---------------------------------------------------------------------------
@@ -600,11 +677,12 @@ def _gather_setlist_data():
     }
 
 
-def _wire_gather(monkeypatch, library_tracks):
+def _wire_gather(monkeypatch, library_tracks, album_map=None):
     monkeypatch.setattr(m, "fetch_setlist", lambda sid, key: _gather_setlist_data())
     monkeypatch.setattr(m, "connect_plex", lambda u, t: object())
     section = _FakeSection(artists=[_FakeArtist("Phish", library_tracks)])
     monkeypatch.setattr(m, "get_music_section", lambda plex, lib: section)
+    monkeypatch.setattr(m, "fetch_album_map", lambda url: album_map or {})
 
 
 def test_gather_matches_builds_structure(monkeypatch):
@@ -619,7 +697,7 @@ def test_gather_matches_builds_structure(monkeypatch):
     assert result["matched"][1]["track_title"] == "Tweezer (Reprise)"
     assert result["matched"][0]["album"] == "Junta"
     assert result["matched"][0]["candidates"][0]["rating_key"] == 10
-    assert result["missing"] == [(3, "Phish", "Some Rarity")]
+    assert result["missing"] == [(3, "Phish", "Some Rarity", "")]  # album from map
     # songs is the full setlist in order, missing rows flagged matched=False
     assert [(s["position"], s["matched"]) for s in result["songs"]] == [
         (1, True), (2, True), (3, False)]

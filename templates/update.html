@@ -92,10 +92,10 @@
   <span class="s">not in your Plex library</span>
 </div>
 <div class="cards">
-  {% for pos, artist, title in result.missing %}
+  {% for pos, artist, title, album in result.missing %}
   <div class="card card-missing">
     <span class="num">{{ '%02d' % pos }}</span>
-    <span style="flex:1">{{ artist }} - {{ title }}</span>
+    <span style="flex:1">{{ artist }} - {{ title }}{% if album %}<span class="sub"> · {{ album }}</span>{% endif %}</span>
   </div>
   {% endfor %}
 </div>
