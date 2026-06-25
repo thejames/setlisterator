@@ -772,6 +772,7 @@ class _FakePlaylistObj:
         self.type = "playlist"
         self._items = list(items)
         self.added = []
+        self.summary = None
 
     def items(self):
         return list(self._items)
@@ -779,6 +780,9 @@ class _FakePlaylistObj:
     def addItems(self, tracks):
         self.added.extend(tracks)
         self._items.extend(tracks)
+
+    def editSummary(self, summary, locked=True):
+        self.summary = summary
 
 
 class _FakeCreatePlex:
@@ -814,6 +818,7 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     assert name == "Phish - MSG"
     assert fake.created[0] == "Phish - MSG"
     assert len(fake.created[1]) == 2          # two tracks fetched + added
+    assert "u" in fake._playlists[-1].summary  # setlist.fm url in the summary
     saved = m.load_history(hist)
     assert saved["abc123"]["playlist_name"] == "Phish - MSG"
     assert saved["abc123"]["matched"] == 2

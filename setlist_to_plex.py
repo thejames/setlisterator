@@ -888,6 +888,15 @@ def create_playlist(config, name, rating_keys, history_meta=None):
     except plex_exceptions.PlexApiException as exc:
         raise PlexError(f"Failed to create playlist: {exc}") from exc
 
+    # Record the setlist.fm link in the Plex playlist's summary. Fail-soft so a
+    # summary hiccup never undoes a created playlist.
+    url = (history_meta or {}).get("url")
+    if url:
+        try:
+            playlist.editSummary(f"{url}\n\nCreated by Setlist-er-ator.")
+        except Exception as exc:
+            logger.warning("Could not set playlist summary (%s).", exc)
+
     _record_history(final_name, getattr(playlist, "ratingKey", None),
                     len(tracks), history_meta)
     return final_name
