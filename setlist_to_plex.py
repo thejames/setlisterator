@@ -72,7 +72,8 @@ except ImportError:  # pragma: no cover - dependency guard
     sys.exit(1)
 
 
-SETLISTFM_API_BASE = "https://api.setlist.fm/rest/1.0/setlist/"
+SETLISTFM_REST_BASE = "https://api.setlist.fm/rest/1.0/"
+SETLISTFM_API_BASE = SETLISTFM_REST_BASE + "setlist/"
 
 logger = logging.getLogger("setlist_to_plex")
 
@@ -190,17 +191,21 @@ def parse_setlist_id(arg):
     return arg
 
 
-def fetch_setlist(setlist_id, api_key):
-    """Fetch and return the raw setlist JSON dict from setlist.fm."""
-    url = SETLISTFM_API_BASE + setlist_id
+def _setlistfm_get(url, api_key, params=None, not_found="That was not found."):
+    """GET a setlist.fm REST endpoint and return its parsed JSON.
+
+    Centralizes auth, error mapping, and JSON parsing so every caller behaves
+    the same. Raises ConnectionError (unreachable), LookupError (404),
+    PermissionError (bad key), or RuntimeError (other non-200 / non-JSON).
+    """
     headers = {"x-api-key": api_key, "Accept": "application/json"}
     try:
-        resp = requests.get(url, headers=headers, timeout=30)
+        resp = requests.get(url, headers=headers, params=params, timeout=30)
     except requests.exceptions.RequestException as exc:
         raise ConnectionError(f"Could not reach setlist.fm: {exc}") from exc
 
     if resp.status_code == 404:
-        raise LookupError(f"No setlist found with ID '{setlist_id}'.")
+        raise LookupError(not_found)
     if resp.status_code in (401, 403):
         raise PermissionError(
             "setlist.fm rejected the API key (check SETLISTFM_API_KEY).")
@@ -212,6 +217,56 @@ def fetch_setlist(setlist_id, api_key):
         return resp.json()
     except ValueError as exc:
         raise RuntimeError("setlist.fm returned a non-JSON response.") from exc
+
+
+def fetch_setlist(setlist_id, api_key):
+    """Fetch and return the raw setlist JSON dict from setlist.fm."""
+    return _setlistfm_get(
+        SETLISTFM_API_BASE + setlist_id, api_key,
+        not_found=f"No setlist found with ID '{setlist_id}'.")
+
+
+def fetch_attended(username, api_key, max_pages=50):
+    """Return the shows a setlist.fm user has marked attended ("I was there").
+
+    Pages through GET /user/{username}/attended (20 setlists/page) and returns
+    a list of light row dicts in setlist.fm's order (most recent first):
+    {id, url, artist, venue, city, date}. Songs are intentionally omitted — the
+    list only needs identity + display fields; each row's Preview re-fetches the
+    full setlist through the normal pipeline. Raises LookupError if the username
+    is unknown, plus the usual connection/permission errors from _setlistfm_get.
+    """
+    url = SETLISTFM_REST_BASE + f"user/{username}/attended"
+    rows = []
+    for page in range(1, max_pages + 1):
+        if page > 1:
+            time.sleep(0.5)   # be polite to the API across pages
+        try:
+            data = _setlistfm_get(
+                url, api_key, params={"p": page},
+                not_found=f"No setlist.fm user named '{username}' (is it public?).")
+        except LookupError:
+            if page == 1:
+                raise         # page 1 -> the username itself is unknown/private
+            break             # later pages -> we've simply run off the end
+        setlists = data.get("setlist") or []
+        for sl in setlists:
+            show = extract_show(sl)
+            rows.append({
+                "id": sl.get("id", ""),
+                "url": show["url"],
+                "artist": show["artist"],
+                "venue": show["venue"],
+                "city": show["city"],
+                "date": show["date"],
+            })
+        # Last page is short (or empty); stop before spending another request.
+        if len(setlists) < (data.get("itemsPerPage") or 20):
+            break
+    else:
+        logger.warning("Stopped paging attended shows for '%s' at the "
+                       "%d-page cap; some may be missing.", username, max_pages)
+    return rows
 
 
 def extract_show(data):

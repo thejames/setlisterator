@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Attended — Setlist-er-ator{% endblock %}
+{% block content %}
+<div style="max-width:560px;margin:6vh auto 0;">
+  <div class="panel" style="padding:24px 26px">
+    <form method="post" action="{{ url_for('attended') }}"
+          data-loading="Fetching your shows…">
+      <label>setlist.fm username
+        <input name="username" autofocus required value="{{ username }}"
+               placeholder="your setlist.fm username">
+      </label>
+      <button type="submit" class="btn-accent" style="margin-top:8px">Load shows</button>
+    </form>
+  </div>
+  {% if error %}
+  <p class="hint" style="margin-top:14px;text-align:center;color:var(--red)">{{ error }}</p>
+  {% else %}
+  <p class="hint" style="margin-top:14px;text-align:center">Lists the shows you've
+    marked “I was there” on setlist.fm. Preview any one to turn it into a playlist —
+    shows you've already created are flagged.</p>
+  {% endif %}
+</div>
+
+{% if shows is defined %}
+<h2 style="margin-top:36px">Attended ({{ shows|length }})</h2>
+{% if shows %}
+<div class="panel">
+<table>
+  <tr><th>Show</th><th>Date</th><th></th></tr>
+  {% for s in shows %}
+  <tr>
+    <td>{{ s.artist }}
+      <span class="sub">{{ s.venue }}{% if s.city %}, {{ s.city }}{% endif %}</span></td>
+    <td class="sub">{{ s.date or "?" }}</td>
+    <td>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        {% if s.prior %}
+        <span class="pill pill-exact">created ✓</span>
+        <form method="post" action="{{ url_for('preview') }}" style="margin:0"
+              data-loading="Matching…">
+          <input type="hidden" name="setlist" value="{{ s.url or s.id }}">
+          <button type="submit">Re-open</button>
+        </form>
+        <form method="post" action="{{ url_for('update_preview') }}" style="margin:0"
+              data-loading="Checking…">
+          <input type="hidden" name="setlist" value="{{ s.url or s.id }}">
+          <input type="hidden" name="playlist_rating_key"
+                 value="{{ s.prior.get('playlist_rating_key', '') }}">
+          <input type="hidden" name="name" value="{{ s.prior.get('playlist_name', '') }}">
+          <button type="submit">Update</button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ url_for('preview') }}" style="margin:0"
+              data-loading="Matching…">
+          <input type="hidden" name="setlist" value="{{ s.url or s.id }}">
+          <button type="submit" class="btn-accent">Preview</button>
+        </form>
+        {% endif %}
+        {% if s.url %}
+        <a href="{{ s.url }}" target="_blank" rel="noopener">setlist.fm ↗</a>
+        {% endif %}
+      </div>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p>No attended shows found for <strong>{{ username }}</strong> — check the
+  username is right and the profile is public.</p>
+{% endif %}
+{% endif %}
+{% endblock %}

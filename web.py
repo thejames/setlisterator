@@ -101,6 +101,44 @@ def buylist():
     return render_template("buylist.html", groups=groups, total=len(by_key))
 
 
+@app.get("/attended")
+def attended():
+    """Show the username form, prefilled from SETLISTFM_USER if set."""
+    try:
+        core.load_config()
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    return render_template("attended.html",
+                           username=os.environ.get("SETLISTFM_USER", ""))
+
+
+@app.post("/attended")
+def attended_load():
+    """List a setlist.fm user's attended shows, marking ones already created."""
+    username = (request.form.get("username") or "").strip()
+    if not username:
+        return render_template("attended.html", username="",
+                               error="Enter a setlist.fm username.")
+    try:
+        config = core.load_config()
+        shows = core.fetch_attended(username, config["api_key"])
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    except LookupError as exc:           # unknown / private user
+        return render_template("attended.html", username=username, error=str(exc))
+    except (PermissionError, ConnectionError) as exc:
+        return _error("setlist.fm problem", str(exc))
+    except Exception as exc:             # any other API hiccup
+        return _error("setlist.fm problem", f"Could not load attended shows: {exc}")
+
+    # Attach each show's prior history entry (if any) so the row can offer
+    # Re-open/Update instead of Preview, like the History page does.
+    seen = core.load_history(core.history_path())
+    for show in shows:
+        show["prior"] = seen.get(show.get("id"))
+    return render_template("attended.html", username=username, shows=shows)
+
+
 @app.get("/search")
 def search():
     """Search the Plex music library by title; returns JSON for the override UI."""

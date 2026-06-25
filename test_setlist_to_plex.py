@@ -632,6 +632,85 @@ def test_fetch_album_map_fail_soft(monkeypatch):
     assert m.fetch_album_map("https://setlist.fm/x.html") == {}   # fail-soft
 
 
+# --- fetch_attended (a user's "I was there" shows) -------------------------
+
+class _AttResp:
+    def __init__(self, payload, status=200):
+        self.status_code = status
+        self._payload = payload
+        self.text = ""
+
+    def json(self):
+        return self._payload
+
+
+def _att_setlists(n, start=0):
+    return [{"id": f"id{i}", "url": f"http://sl/{i}",
+             "artist": {"name": "A"}, "eventDate": "16-06-2026",
+             "venue": {"name": "V", "city": {"name": "C"}}}
+            for i in range(start, start + n)]
+
+
+def test_fetch_attended_paginates_and_stops(monkeypatch):
+    monkeypatch.setattr(m.time, "sleep", lambda *a: None)
+    pages = {1: {"itemsPerPage": 20, "setlist": _att_setlists(20, 0)},
+             2: {"itemsPerPage": 20, "setlist": _att_setlists(5, 20)}}
+    calls = []
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        calls.append(params["p"])
+        return _AttResp(pages[params["p"]])
+
+    monkeypatch.setattr(m.requests, "get", fake_get)
+    rows = m.fetch_attended("bob", "key")
+    assert calls == [1, 2]                  # stopped once a page came up short
+    assert len(rows) == 25
+    assert rows[0] == {"id": "id0", "url": "http://sl/0", "artist": "A",
+                       "venue": "V", "city": "C", "date": "2026-06-16"}
+
+
+def test_fetch_attended_unknown_user_raises(monkeypatch):
+    monkeypatch.setattr(m.requests, "get",
+                        lambda *a, **k: _AttResp(None, status=404))
+    with pytest.raises(LookupError):
+        m.fetch_attended("nobody", "key")
+
+
+def test_fetch_attended_empty_returns_list(monkeypatch):
+    monkeypatch.setattr(m.requests, "get",
+                        lambda *a, **k: _AttResp({"itemsPerPage": 20}))
+    assert m.fetch_attended("bob", "key") == []
+
+
+def test_fetch_attended_404_on_later_page_ends_cleanly(monkeypatch):
+    # Page 1 returns a full page (no itemsPerPage to trigger the early exit);
+    # page 2 404s -> treated as end-of-results, not an "unknown user" error.
+    monkeypatch.setattr(m.time, "sleep", lambda *a: None)
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if params["p"] == 1:
+            return _AttResp({"setlist": _att_setlists(20)})  # no itemsPerPage
+        return _AttResp(None, status=404)
+
+    monkeypatch.setattr(m.requests, "get", fake_get)
+    rows = m.fetch_attended("bob", "key")
+    assert len(rows) == 20                  # page 1 kept, page 2 stopped the loop
+
+
+def test_fetch_attended_respects_max_pages(monkeypatch):
+    monkeypatch.setattr(m.time, "sleep", lambda *a: None)
+    calls = []
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        calls.append(params["p"])
+        return _AttResp({"itemsPerPage": 20, "setlist": _att_setlists(20)})
+
+    monkeypatch.setattr(m.requests, "get", fake_get)
+    rows = m.fetch_attended("bob", "key", max_pages=2)
+    assert calls == [1, 2]                  # capped, no runaway
+    assert len(rows) == 40
+
+
 def test_gather_attaches_setlistfm_album(monkeypatch):
     library = [_FakeTrack("Wilson", "Phish", rating_key=10),
                _FakeTrack("Tweezer (Reprise)", "Phish", rating_key=11)]

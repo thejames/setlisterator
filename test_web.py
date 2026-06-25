@@ -423,3 +423,55 @@ def test_create_added_count_is_deduped(client, monkeypatch):
     })
     body = resp.data.decode()
     assert "2 tracks added" in body   # deduped: {10, 21}, not 3
+
+
+# --- /attended (browse a user's "I was there" shows) -----------------------
+
+def test_attended_get_prefills_username(client, monkeypatch):
+    monkeypatch.setenv("SETLISTFM_USER", "thejames")
+    resp = client.get("/attended")
+    assert resp.status_code == 200
+    assert 'value="thejames"' in resp.data.decode()
+
+
+def test_attended_post_lists_shows_with_history_crossref(client, monkeypatch):
+    shows = [
+        {"id": "new1", "url": "http://sl/new1", "artist": "Primus",
+         "venue": "TD", "city": "Charlotte", "date": "2026-06-16"},
+        {"id": "old1", "url": "http://sl/old1", "artist": "Phish",
+         "venue": "MSG", "city": "New York", "date": "2025-12-31"},
+    ]
+    monkeypatch.setattr(core, "fetch_attended", lambda u, k: shows)
+    monkeypatch.setattr(core, "load_history",
+                        lambda path: {"old1": {"playlist_name": "Phish - MSG",
+                                               "playlist_rating_key": 999}})
+    resp = client.post("/attended", data={"username": "bob"})
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "Attended (2)" in body
+    assert "Primus" in body and "Phish" in body
+    assert "created ✓" in body              # old1 flagged from history
+    assert "Phish - MSG" in body            # Update form carries playlist name
+
+
+def test_attended_post_empty_username(client):
+    resp = client.post("/attended", data={"username": ""})
+    assert resp.status_code == 200
+    assert "Enter a setlist.fm username." in resp.data.decode()
+
+
+def test_attended_post_unknown_user(client, monkeypatch):
+    def boom(username, api_key):
+        raise LookupError("No setlist.fm user named 'nobody' (is it public?).")
+    monkeypatch.setattr(core, "fetch_attended", boom)
+    resp = client.post("/attended", data={"username": "nobody"})
+    assert resp.status_code == 200
+    assert "is it public" in resp.data.decode()
+
+
+def test_attended_post_no_shows(client, monkeypatch):
+    monkeypatch.setattr(core, "fetch_attended", lambda u, k: [])
+    monkeypatch.setattr(core, "load_history", lambda path: {})
+    resp = client.post("/attended", data={"username": "bob"})
+    assert resp.status_code == 200
+    assert "No attended shows found" in resp.data.decode()

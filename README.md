@@ -195,6 +195,14 @@ preview a show), with [MusicBrainz](https://musicbrainz.org/) as a fallback for
 the few it doesn't map (e.g. covers) — looked up lazily on first Buy-list view
 and cached into history. Both are best-effort and degrade gracefully offline.
 
+The **Attended** link turns your setlist.fm "I was there" history into a
+worklist. Enter a setlist.fm username (pre-filled from the optional
+`SETLISTFM_USER` in your `.env`) and it lists every show you've marked attended,
+newest first. Each row has a **Preview** button that drops into the normal
+match → create flow; shows you've already made are flagged `created ✓` with
+**Re-open** / **Update** instead. It reads public attended data, so any public
+username works.
+
 > **Local only.** The app talks to your local Plex server and holds your Plex
 > token, so it binds to `127.0.0.1` and has no authentication. Don't expose it
 > to a network.
