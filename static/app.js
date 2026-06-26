@@ -20,10 +20,12 @@
     if (btn) btn.textContent = n;
   }
 
-  // --- manual library search (missing cards) -------------------------------
-  async function runSearch(card) {
-    const query = card.querySelector(".q").value.trim();
-    const results = card.querySelector(".results");
+  // --- manual library search (shared by missing cards and matched rows) ----
+  // `scope` is any element containing a `.q` input and a `.results` box; each
+  // result button invokes onPick(track, label).
+  async function doSearch(scope, onPick) {
+    const query = scope.querySelector(".q").value.trim();
+    const results = scope.querySelector(".results");
     results.textContent = "";
     if (!query) return;
     results.textContent = "searching…";
@@ -42,10 +44,11 @@
       const label = t.artist + " — " + t.title + (t.album ? " · " + t.album : "");
       const b = el("button", "result", label);
       b.type = "button";
-      b.addEventListener("click", function () { chooseMissing(card, t, label); });
+      b.addEventListener("click", function () { onPick(t, label); });
       results.appendChild(b);
     });
   }
+  // Choose a library track for a (previously) missing card.
   function chooseMissing(card, track, label) {
     const pick = card.querySelector(".pick");
     const inc = card.querySelector(".inc");
@@ -55,6 +58,44 @@
     card.querySelector(".searcher").hidden = true;
     card.querySelector(".results").textContent = "";
     card.classList.remove("skipped");
+    updateCount();
+  }
+  // Re-point a matched row to an arbitrary library track found via search.
+  function applyPick(pos, track, label) {
+    const row = document.querySelector('tr[data-rownum="' + pos + '"]');
+    if (!row) return;
+    const pick = row.querySelector('[name="pick_' + pos + '"]');
+    if (pick) { pick.value = track.rating_key; pick.disabled = false; }
+    const inc = row.querySelector("input.inc");
+    if (inc) { inc.checked = true; inc.disabled = false; inc.hidden = false; }
+    const title = track.artist + " — " + track.title;
+    const sub = track.album || "searched";
+    const menu = row.querySelector(".dd-menu");
+    if (menu) {                                     // multi-match dropdown row
+      // Represent the searched track as a (selected) option so reopening the
+      // dropdown stays honest and re-selecting it works like any other.
+      let opt = menu.querySelector('.dd-opt[data-key="' + track.rating_key + '"]');
+      if (!opt) {
+        opt = el("button", "dd-opt");
+        opt.type = "button";
+        opt.dataset.key = track.rating_key;
+        opt.dataset.title = title;
+        opt.dataset.sub = sub;
+        opt.appendChild(el("span", "dd-title trunc", title));
+        opt.appendChild(el("span", "dd-sub trunc", sub));
+        opt.addEventListener("click", function () { selectDdOpt(opt); });
+        menu.appendChild(opt);
+      }
+      selectDdOpt(opt);                             // sets pick + display + sel
+    } else {                                        // single-candidate row
+      const t = row.querySelector("[data-rowtitle]");
+      if (t) t.textContent = title;
+      const s = row.querySelector("[data-rowsub]");
+      if (s) s.textContent = track.album || "";
+    }
+    const box = row.querySelector("[data-rowsearch-box]");
+    if (box) box.hidden = true;
+    row.querySelectorAll(".results").forEach(function (r) { r.textContent = ""; });
     updateCount();
   }
 
@@ -67,6 +108,17 @@
       if (menu) menu.hidden = true;
       if (btn) btn.classList.remove("open");
     });
+  }
+  // Apply a dropdown option's choice to its row (hidden pick + button display).
+  function selectDdOpt(opt) {
+    const dd = opt.closest("[data-dd]");
+    dd.querySelector("input[type=hidden]").value = opt.dataset.key;
+    dd.querySelector("[data-dd-title]").textContent = opt.dataset.title;
+    dd.querySelector("[data-dd-sub]").textContent = opt.dataset.sub;
+    dd.querySelectorAll(".dd-opt").forEach(function (o) { o.classList.remove("sel"); });
+    opt.classList.add("sel");
+    dd.querySelector(".dd-menu").hidden = true;
+    dd.querySelector(".dd-btn").classList.remove("open");
   }
 
   // --- preview JSON of the current selection -------------------------------
@@ -107,15 +159,35 @@
     const go = card.querySelector(".go");
     const q = card.querySelector(".q");
     const skip = card.querySelector("[data-skip]");
-    if (go) go.addEventListener("click", function () { runSearch(card); });
+    function run() { doSearch(card, function (t, l) { chooseMissing(card, t, l); }); }
+    if (go) go.addEventListener("click", run);
     if (q) q.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") { e.preventDefault(); runSearch(card); }
+      if (e.key === "Enter") { e.preventDefault(); run(); }
     });
     if (skip) skip.addEventListener("click", function () {
       const inc = card.querySelector(".inc");
       if (inc) inc.checked = false;
       card.classList.add("skipped");
       updateCount();
+    });
+  });
+
+  // Matched rows: a "search…" toggle reveals an inline searcher to re-point the
+  // row at any library track when none of the auto-matches are right.
+  document.querySelectorAll("[data-rowsearch]").forEach(function (btn) {
+    const pos = btn.dataset.rowsearch;
+    const box = document.querySelector('[data-rowsearch-box="' + pos + '"]');
+    if (!box) return;
+    const go = box.querySelector(".go");
+    const q = box.querySelector(".q");
+    function run() { doSearch(box, function (t, l) { applyPick(pos, t, l); }); }
+    btn.addEventListener("click", function () {
+      box.hidden = !box.hidden;
+      if (!box.hidden && q) q.focus();
+    });
+    if (go) go.addEventListener("click", run);
+    if (q) q.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); run(); }
     });
   });
 
@@ -131,16 +203,7 @@
     });
   });
   document.querySelectorAll(".dd-opt").forEach(function (opt) {
-    opt.addEventListener("click", function () {
-      const dd = opt.closest("[data-dd]");
-      dd.querySelector("input[type=hidden]").value = opt.dataset.key;
-      dd.querySelector("[data-dd-title]").textContent = opt.dataset.title;
-      dd.querySelector("[data-dd-sub]").textContent = opt.dataset.sub;
-      dd.querySelectorAll(".dd-opt").forEach(function (o) { o.classList.remove("sel"); });
-      opt.classList.add("sel");
-      dd.querySelector(".dd-menu").hidden = true;
-      dd.querySelector(".dd-btn").classList.remove("open");
-    });
+    opt.addEventListener("click", function () { selectDdOpt(opt); });
   });
   document.addEventListener("click", function () { closeDropdowns(null); });
 

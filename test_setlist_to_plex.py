@@ -83,6 +83,26 @@ def test_aggressive_and_equals_ampersand():
         m.normalize_aggressive("Punch You in the Eye & More")
 
 
+def test_aggressive_joins_dotted_acronyms():
+    # "N.I.B." must normalize like "NIB" so it matches the medley segment.
+    assert m.normalize_aggressive("N.I.B.") == "nib"
+    assert m.normalize_aggressive("N.I.B.") == m.normalize_aggressive("NIB")
+    assert m.normalize_aggressive("U.S.A.") == "usa"
+    # but ordinary words/names with a dot are left alone
+    assert m.normalize_aggressive("Mr. Crowley") == "mr crowley"
+    assert m.normalize_aggressive("will.i.am") == "will i am"
+
+
+def test_dotted_acronym_matches_medley_segment():
+    # The reported case: setlist "N.I.B." (and "Bassically") both match a single
+    # library medley track at the medley tier.
+    medley = "Medley: Wasp / Behind The Wall Of Sleep / Bassically / NIB"
+    for song in ("N.I.B.", "Bassically"):
+        rank = m._title_rank(m.normalize_simple(song),
+                             m.normalize_aggressive(song), medley)
+        assert rank == m.TIER_NAMES.index("medley")
+
+
 # ---------------------------------------------------------------------------
 # artists_match
 # ---------------------------------------------------------------------------

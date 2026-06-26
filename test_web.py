@@ -254,6 +254,11 @@ def test_preview_renders_matches(client, monkeypatch):
     assert 'class="urlbar"' in body and "Re-import" in body
     assert 'class="addbox"' in body
     assert "data-create-count" in body
+    # matched rows get a manual-search escape hatch (single AND multi rows)
+    assert 'data-rowsearch="1"' in body              # Tommy (single candidate)
+    assert 'data-rowsearch="2"' in body              # Jerry (multi candidate)
+    assert "none right? search" in body
+    assert 'data-rownum="1"' in body and "data-rowtitle" in body
 
 
 def test_stats_counts_are_exclusive():

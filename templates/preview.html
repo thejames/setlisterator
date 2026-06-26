@@ -78,7 +78,7 @@
       </tr>
       {% for s in result.songs %}
       {% set status = 'missing' if not s.matched else ('multi' if s.candidates|length > 1 else s.quality) %}
-      <tr class="{{ 'missing' if not s.matched else '' }}">
+      <tr class="{{ 'missing' if not s.matched else '' }}" data-rownum="{{ s.position }}">
         <td style="text-align:center">
           {% if s.matched %}
           <label class="addbox">
@@ -117,9 +117,20 @@
               </div>
             </div>
           {% else %}
-            <div class="trunc">{{ s.track_artist }} — {{ s.track_title }}</div>
-            {% if s.album %}<div class="sub trunc">{{ s.album }}</div>{% endif %}
+            <div class="trunc" data-rowtitle>{{ s.track_artist }} — {{ s.track_title }}</div>
+            <div class="sub trunc" data-rowsub>{{ s.album }}</div>
             <input type="hidden" name="pick_{{ s.position }}" value="{{ s.rating_key }}">
+          {% endif %}
+          {% if s.matched %}
+          <button type="button" class="rowsearch-toggle" data-rowsearch="{{ s.position }}"
+                  style="background:none;border:none;color:var(--blue);font-size:12px;cursor:pointer;padding:6px 0 0">none right? search…</button>
+          <div class="rowsearch" data-rowsearch-box="{{ s.position }}" hidden style="margin-top:6px">
+            <div class="searchrow" style="margin:0">
+              <input type="search" class="q" value="{{ s.title }}" placeholder="search Plex…" aria-label="Search library">
+              <button type="button" class="go">Search</button>
+            </div>
+            <div class="results"></div>
+          </div>
           {% endif %}
         </td>
         <td style="text-align:right">

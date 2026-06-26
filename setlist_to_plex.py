@@ -147,9 +147,21 @@ def normalize_simple(text):
     return _collapse(text)
 
 
+def _join_acronyms(text):
+    """Join dotted acronyms so "N.I.B." -> "NIB", "U.S.A" -> "USA".
+
+    Matches a run of single letters each followed by a dot (at least two, so a
+    word like "Mr." or "will.i.am" is left alone) and strips the dots — otherwise
+    _collapse would turn them into spaces ("n i b") and they'd never match the
+    undotted form ("nib")."""
+    return re.sub(r"\b(?:[A-Za-z]\.){2,}[A-Za-z]?",
+                  lambda mt: mt.group(0).replace(".", ""), text)
+
+
 def normalize_aggressive(text):
-    """Looser normalization: drop parentheticals, feat., leading 'the', and
-    canonicalize Pt./Part, and/&. Used for fuzzy comparison."""
+    """Looser normalization: drop parentheticals, feat., leading 'the', join
+    dotted acronyms, and canonicalize Pt./Part, and/&. Used for fuzzy
+    comparison."""
     if not text:
         return ""
     text = text.lower()
@@ -157,6 +169,7 @@ def normalize_aggressive(text):
     text = re.sub(r"[\(\[\{].*?[\)\]\}]", " ", text)
     # Drop featured-artist clauses.
     text = re.sub(r"\b(feat|ft|featuring|with)\.?\b.*$", " ", text)
+    text = _join_acronyms(text)   # "n.i.b." -> "nib" before dots become spaces
     text = _collapse(text)
     for pattern, repl in _REPLACEMENTS:
         text = re.sub(pattern, repl, text)
