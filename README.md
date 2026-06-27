@@ -181,6 +181,16 @@ is preselected. Review it (and tweak the playlist name if you like), then click
 rating keys, so nothing is re-matched, and the run is recorded in the same
 [history](#processed-setlist-history) the CLI uses.
 
+The preview table has a few extra handles. A **magnifier** next to each match
+lets you search your library by hand and re-point the row when none of the
+auto-matches are right. Clicking the **Exact/Fuzzy pill** opens a popover
+explaining *how* the row matched — the title tier (exact, close, medley,
+prefix) and whether it came from the artist's own tracks or a library-wide
+search. The summary **chips** above the table double as filters: click one
+(exact, fuzzy, multi-match, missing) to flash and highlight those rows, then
+click it again — or the **songs** total — to clear. The source **URL bar**
+links out to the show on setlist.fm in a new tab.
+
 The top navbar's **History** link opens a page listing every show you've
 created, newest first. Each row can **Re-open** the setlist in Preview, link out
 to its setlist.fm source, or **Update** the existing playlist: it re-matches the
