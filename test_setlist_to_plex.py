@@ -1092,6 +1092,25 @@ def test_playlist_summary_counts_songs_not_deduped_tracks():
     ]
 
 
+def test_playlist_summary_excluded_song_is_not_a_full_run():
+    # song_count is the true setlist length. If fewer songs were added than the
+    # setlist holds (a matched song was excluded in the web UI), it is NOT a
+    # full run even though nothing is "missing".
+    summary = m._playlist_summary(
+        {"url": "u", "missing_tracks": [], "song_count": 6}, added_count=5)
+    assert summary.startswith("5 of 6 songs added.")
+    assert "full run" not in summary
+    assert "Missing" not in summary          # excluded != missing
+
+
+def test_playlist_summary_song_count_full_run():
+    # All of the setlist's songs added -> full run, using song_count as total.
+    summary = m._playlist_summary(
+        {"url": "u", "missing_tracks": [], "song_count": 6}, added_count=6)
+    assert summary.startswith("6 of 6 songs added.")
+    assert "This is the full run of the show." in summary
+
+
 def test_playlist_summary_no_track_note_when_one_to_one():
     # track_count == added_count -> no parenthetical (the common case).
     summary = m._playlist_summary(

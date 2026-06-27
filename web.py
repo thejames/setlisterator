@@ -242,11 +242,16 @@ def _history_meta_from_form(setlist_id):
         missing = json.loads(request.form.get("missing_json") or "[]")
     except ValueError:
         missing = []
+    try:
+        song_count = int(request.form.get("song_count") or 0)
+    except ValueError:
+        song_count = 0
     return {
         "id": setlist_id,
         "url": request.form.get("url", ""),
         "artist": request.form.get("artist", ""),
         "date": request.form.get("date", ""),
+        "song_count": song_count,
         "missing": len(missing),
         # missing rows are [position, artist, title, album?]; carry position+album.
         "missing_tracks": [

@@ -1027,7 +1027,10 @@ def _playlist_summary(history_meta, added_count, track_count=None):
     if not meta:
         return ""
     missing = meta.get("missing_tracks", []) or []
-    total = added_count + len(missing)
+    # Prefer the true setlist length (set by callers that know it); fall back to
+    # added + missing. This keeps "of N" honest when songs were excluded in the
+    # web UI (added < total, yet nothing is "missing").
+    total = meta.get("song_count") or (added_count + len(missing))
     note = ""
     if track_count is not None and track_count < added_count:
         note = (f" ({track_count} unique track{'' if track_count == 1 else 's'}; "
@@ -1037,7 +1040,9 @@ def _playlist_summary(history_meta, added_count, track_count=None):
     # Only tracks with a title render as bullets; count the header off those so
     # "Missing (N):" always matches the number of lines that follow.
     renderable = [t for t in missing if (t.get("title") or "").strip()]
-    if total and not missing:
+    # Full run only when every setlist song made it in: nothing missing AND
+    # nothing excluded (added covers the whole setlist).
+    if total and not missing and added_count >= total:
         lines += ["", "This is the full run of the show."]
     elif renderable:
         lines += ["", f"Missing ({len(renderable)}):"]
@@ -1309,6 +1314,7 @@ def main(argv=None):
         "url": result["show"]["url"],
         "artist": result["show"]["artist"],
         "date": result["show"]["date"],
+        "song_count": len(result["songs"]),
         "missing": len(result["missing"]),
         "missing_tracks": [
             {"position": r[0], "artist": r[1], "title": r[2],

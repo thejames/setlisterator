@@ -253,6 +253,8 @@ def test_preview_renders_matches(client, monkeypatch):
     # category chips highlight their rows; rows carry a status for the filter
     assert 'data-chip-filter="fuzzy"' in body
     assert 'data-status="exact"' in body
+    # the create form carries the true setlist length for the full-run check
+    assert 'name="song_count" value="3"' in body   # fixture has 3 songs
     # spec elements: URL bar + Re-import, custom Add box, count-in-button
     assert 'class="urlbar"' in body and "Re-import" in body
     # URL bar links out to setlist.fm in a new tab
@@ -419,6 +421,22 @@ def test_create_excludes_unchecked_rows(client, monkeypatch):
     })
     assert resp.status_code == 200
     assert captured["keys"] == ["10", "30"]   # row 2 excluded, order preserved
+
+
+def test_create_passes_song_count_for_full_run(client, monkeypatch):
+    # The true setlist length rides along in history_meta so the Plex summary
+    # can tell an excluded song from a full run.
+    captured = {}
+    monkeypatch.setattr(core, "create_playlist",
+                        lambda cfg, name, keys, meta: captured.update(meta=meta)
+                        or name)
+    resp = client.post("/create", data={
+        "name": "Show", "setlist_id": "abc",
+        "include": ["1"], "pick_1": "10",
+        "missing_json": "[]", "fuzzy_json": "[]", "song_count": "6",
+    })
+    assert resp.status_code == 200
+    assert captured["meta"]["song_count"] == 6
 
 
 def test_create_requires_keys(client):
