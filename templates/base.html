@@ -93,7 +93,8 @@
 
     /* Stat chips */
     .chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 22px; }
-    .chip { display: flex; align-items: baseline; gap: 9px; padding: 11px 16px;
+    .chip { display: flex; align-items: baseline; justify-content: center; gap: 9px;
+      flex: 1 1 140px; padding: 11px 16px;
       background: var(--panel); border: 1px solid var(--border); border-radius: 9px; }
     .chip b { font-family: var(--mono); font-size: 20px; font-weight: 600;
       color: var(--text); }
@@ -102,6 +103,23 @@
     .chip.fuzzy b { color: var(--accent); }
     .chip.multi b { color: var(--blue); }
     .chip.missing b { color: var(--red); }
+    /* Clickable category chips: highlight their rows in the table below. */
+    .chip[data-chip-filter], .chip[data-chip-clear] { cursor: pointer; }
+    .chip[data-chip-filter]:hover, .chip[data-chip-clear]:hover { border-color: var(--border2); }
+    .chip.exact.active   { border-color: var(--green);  background: #5BB98B14; }
+    .chip.fuzzy.active   { border-color: var(--accent); background: #E0A33C14; }
+    .chip.multi.active   { border-color: var(--blue);   background: #6E9BF014; }
+    .chip.missing.active { border-color: var(--red);    background: #E0656B14; }
+    /* Rows marked by a chip click: per-status colour, a left accent bar and a
+       faint tint that persist after the one-shot flash fades. */
+    tr.row-marked[data-status="exact"]   { --mark: var(--green); }
+    tr.row-marked[data-status="fuzzy"]   { --mark: var(--accent); }
+    tr.row-marked[data-status="multi"]   { --mark: var(--blue); }
+    tr.row-marked[data-status="missing"] { --mark: var(--red); }
+    tr.row-marked td { background: color-mix(in srgb, var(--mark) 7%, transparent); }
+    tr.row-marked td:first-child { box-shadow: inset 3px 0 0 var(--mark); }
+    @keyframes rowflash { from { background: color-mix(in srgb, var(--mark) 45%, transparent); } }
+    tr.row-flash td { animation: rowflash .9s ease-out; }
 
     /* Panels & tables */
     .panel { background: var(--panel); border: 1px solid var(--border);

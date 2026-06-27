@@ -248,6 +248,44 @@
     closeMatchPops(null);
   });
 
+  // --- chip-to-row highlighting --------------------------------------------
+  // Clicking a category chip flashes its matching rows, then leaves a coloured
+  // left bar + faint tint until another chip (or the same one) is clicked.
+  function clearRowMarks() {
+    document.querySelectorAll("tr.row-marked, tr.row-flash").forEach(function (tr) {
+      tr.classList.remove("row-marked", "row-flash");
+    });
+    document.querySelectorAll(".chip.active").forEach(function (c) {
+      c.classList.remove("active");
+    });
+  }
+  function markRows(chip) {
+    if (chip.classList.contains("active")) { clearRowMarks(); return; }  // toggle off
+    const rows = document.querySelectorAll(
+      'tr[data-status="' + chip.dataset.chipFilter + '"]');
+    if (!rows.length) return;                       // 0-count chip: leave marks as-is
+    clearRowMarks();
+    // row-flash plays once and settles into the resting row-marked tint; it is
+    // stripped again by the next clearRowMarks(), so no animationend cleanup is
+    // needed (and chasing it leaks listeners when a flash is cut short).
+    rows.forEach(function (tr) { tr.classList.add("row-marked", "row-flash"); });
+    chip.classList.add("active");
+    rows[0].scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  document.querySelectorAll("[data-chip-filter]").forEach(function (chip) {
+    chip.addEventListener("click", function () { markRows(chip); });
+    chip.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); markRows(chip); }
+    });
+  });
+  // The "songs" total chip clears any active highlight.
+  document.querySelectorAll("[data-chip-clear]").forEach(function (chip) {
+    chip.addEventListener("click", clearRowMarks);
+    chip.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); clearRowMarks(); }
+    });
+  });
+
   document.querySelectorAll("[data-accept]").forEach(function (b) {
     b.addEventListener("click", function () {
       const inc = incFor(b.dataset.accept);

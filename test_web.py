@@ -250,6 +250,9 @@ def test_preview_renders_matches(client, monkeypatch):
     # design: stat chips and the live selected count
     assert 'class="chip' in body
     assert "data-selected" in body
+    # category chips highlight their rows; rows carry a status for the filter
+    assert 'data-chip-filter="fuzzy"' in body
+    assert 'data-status="exact"' in body
     # spec elements: URL bar + Re-import, custom Add box, count-in-button
     assert 'class="urlbar"' in body and "Re-import" in body
     # URL bar links out to setlist.fm in a new tab

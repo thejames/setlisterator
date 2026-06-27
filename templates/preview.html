@@ -69,11 +69,12 @@
   </div>
 
   <div class="chips">
-    <div class="chip"><b>{{ stats.total }}</b><span>songs</span></div>
-    <div class="chip exact"><b>{{ stats.exact }}</b><span>exact</span></div>
-    <div class="chip fuzzy"><b>{{ stats.fuzzy }}</b><span>fuzzy</span></div>
-    <div class="chip multi"><b>{{ stats.multi }}</b><span>multi-match</span></div>
-    <div class="chip missing"><b>{{ stats.missing }}</b><span>missing</span></div>
+    <div class="chip" data-chip-clear role="button" tabindex="0"
+         aria-label="Clear row highlight"><b>{{ stats.total }}</b><span>songs</span></div>
+    <div class="chip exact" data-chip-filter="exact" role="button" tabindex="0"><b>{{ stats.exact }}</b><span>exact</span></div>
+    <div class="chip fuzzy" data-chip-filter="fuzzy" role="button" tabindex="0"><b>{{ stats.fuzzy }}</b><span>fuzzy</span></div>
+    <div class="chip multi" data-chip-filter="multi" role="button" tabindex="0"><b>{{ stats.multi }}</b><span>multi-match</span></div>
+    <div class="chip missing" data-chip-filter="missing" role="button" tabindex="0"><b>{{ stats.missing }}</b><span>missing</span></div>
   </div>
 
   {% if result.songs %}
@@ -91,7 +92,7 @@
       </tr>
       {% for s in result.songs %}
       {% set status = 'missing' if not s.matched else ('multi' if s.candidates|length > 1 else s.quality) %}
-      <tr class="{{ 'missing' if not s.matched else '' }}" data-rownum="{{ s.position }}">
+      <tr class="{{ 'missing' if not s.matched else '' }}" data-rownum="{{ s.position }}" data-status="{{ status }}">
         <td style="text-align:center">
           {% if s.matched %}
           <label class="addbox">
