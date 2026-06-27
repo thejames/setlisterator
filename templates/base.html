@@ -147,6 +147,22 @@
       border: none; color: var(--muted); cursor: pointer; border-radius: 6px; }
     .rowsearch-btn:hover, .rowsearch-btn.open { color: var(--blue); background: #6E9BF01f; }
     .rowsearch-btn svg { display: block; }
+    /* Clickable pill: opens a popover explaining how the row was matched. */
+    .matchinfo { position: relative; display: inline-flex; }
+    .pill-btn { font-family: inherit; cursor: pointer; gap: 4px; }
+    .pill-caret { font-size: 9px; opacity: .7; }
+    .pill-btn[aria-expanded="true"] { filter: brightness(1.25); }
+    .matchpop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 100;
+      width: max-content; max-width: 240px; text-align: left; white-space: normal;
+      background: #1B1B21; border: 1px solid var(--border2); border-radius: 10px;
+      box-shadow: 0 16px 40px rgba(0,0,0,.55); padding: 10px 12px; }
+    .matchpop-head { font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--dim); margin-bottom: 6px; }
+    .matchpop-line { font-size: 12px; color: var(--text2); line-height: 1.45; }
+    .matchpop-code { margin-top: 7px; font-family: var(--mono); font-size: 11px;
+      color: var(--muted); }
+    /* The open popover's cell stacks above later rows. */
+    .tracktable td:has(.pill-btn[aria-expanded="true"]) { position: relative; z-index: 50; }
 
     /* Section cards (fuzzy / missing summaries) */
     .section-head { display: flex; align-items: center; gap: 10px; margin: 30px 0 13px; }
@@ -234,8 +250,8 @@
     .dd-opt:hover, .dd-opt.sel { background: #23232B; }
 
     /* Narrow screens: reflow each track row so the Plex-track column drops
-       to a full-width second line below the compact columns. The header row
-       and the tier·source sub-label are hidden to keep the top line legible. */
+       to a full-width second line below the compact columns. The column
+       header row is hidden to keep the top line legible. */
     @media (max-width: 640px) {
       .tracktable { display: block; }
       .tracktable tr {
@@ -258,7 +274,6 @@
       .tracktable td:nth-child(3) { grid-area: title; }
       .tracktable td:nth-child(4) { grid-area: plex; }
       .tracktable td:nth-child(5) { grid-area: match; }
-      .matchcell .sub { display: none; }                 /* tier·source */
     }
 
     /* Spec: richer Fuzzy / Missing section cards */

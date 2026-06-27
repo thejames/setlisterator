@@ -68,6 +68,10 @@
   </div>
 
   {% if result.songs %}
+  {% set TIER_TEXT = {'exact': 'Exact title match', 'loose': 'Close title match',
+                      'medley': 'Matched inside a medley', 'prefix': 'Title prefix match'} %}
+  {% set SOURCE_TEXT = {'scoped': "From " ~ result.show.artist ~ "’s own tracks in your library",
+                        'global': 'Found by a library-wide title search'} %}
   <div class="panel">
     <table class="tracktable">
       <tr>
@@ -133,7 +137,7 @@
         </td>
         <td>
           <div class="matchcell">
-          {% if s.matched %}<span class="sub">{{ s.tier }}·{{ s.source }}</span>
+          {% if s.matched %}
           <button type="button" class="rowsearch-btn" data-rowsearch="{{ s.position }}"
                   title="Search library" aria-label="Search library">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -141,7 +145,22 @@
               <circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line>
             </svg>
           </button>{% endif %}
-          <span class="pill pill-{{ status }}">{% if status == 'multi' %}{{ s.candidates|length }} matches{% elif status == 'missing' %}Missing{% elif status == 'fuzzy' %}Fuzzy{% else %}Exact{% endif %}</span>
+          {% if status in ('exact', 'fuzzy') %}
+          <span class="matchinfo">
+            <button type="button" class="pill pill-{{ status }} pill-btn" data-matchinfo
+                    aria-expanded="false" aria-haspopup="true">
+              {{ 'Fuzzy' if status == 'fuzzy' else 'Exact' }}<span class="pill-caret">⌄</span>
+            </button>
+            <div class="matchpop" data-matchpop hidden>
+              <div class="matchpop-head">How this matched</div>
+              <div class="matchpop-line">{{ TIER_TEXT.get(s.tier, s.tier) }}</div>
+              <div class="matchpop-line">{{ SOURCE_TEXT.get(s.source, s.source) }}</div>
+              <div class="matchpop-code" data-matchpop-code>{{ s.tier }} · {{ s.source }}</div>
+            </div>
+          </span>
+          {% else %}
+          <span class="pill pill-{{ status }}">{% if status == 'multi' %}{{ s.candidates|length }} matches{% elif status == 'missing' %}Missing{% else %}Exact{% endif %}</span>
+          {% endif %}
           </div>
         </td>
       </tr>

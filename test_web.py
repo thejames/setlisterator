@@ -258,6 +258,10 @@ def test_preview_renders_matches(client, monkeypatch):
     assert 'data-rowsearch="1"' in body              # Tommy (single candidate)
     assert 'data-rowsearch="2"' in body              # Jerry (multi candidate)
     assert 'class="rowsearch-btn"' in body           # magnifier toggle by the pill
+    # the Exact/Fuzzy pill is a button opening a match-explanation popover
+    assert "data-matchinfo" in body                  # Tommy's clickable pill
+    assert "Exact title match" in body               # tier -> plain language
+    assert "Primus" in body and "own tracks in your library" in body  # source
     assert 'data-rownum="1"' in body and "data-rowtitle" in body
 
 

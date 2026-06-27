@@ -97,6 +97,15 @@
     if (box) box.hidden = true;
     const tgl = row.querySelector('.rowsearch-btn[data-rowsearch="' + pos + '"]');
     if (tgl) tgl.classList.remove("open");          // clear the magnifier highlight
+    // The auto-match explanation no longer describes a hand-picked track.
+    const pop = row.querySelector("[data-matchpop]");
+    if (pop) {
+      const lines = pop.querySelectorAll(".matchpop-line");
+      if (lines[0]) lines[0].textContent = "Chosen manually from library search";
+      if (lines[1]) lines[1].hidden = true;
+      const code = pop.querySelector("[data-matchpop-code]");
+      if (code) code.hidden = true;
+    }
     row.querySelectorAll(".results").forEach(function (r) { r.textContent = ""; });
     updateCount();
   }
@@ -109,6 +118,16 @@
       const btn = dd.querySelector(".dd-btn");
       if (menu) menu.hidden = true;
       if (btn) btn.classList.remove("open");
+    });
+  }
+  // Close every match-explanation popover except the one in `except` (a
+  // [data-matchinfo] button's parent), resetting each trigger's aria state.
+  function closeMatchPops(except) {
+    document.querySelectorAll("[data-matchinfo]").forEach(function (btn) {
+      if (btn.parentElement === except) return;
+      const pop = btn.parentElement.querySelector("[data-matchpop]");
+      if (pop) pop.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
     });
   }
   // Apply a dropdown option's choice to its row (hidden pick + button display).
@@ -201,6 +220,7 @@
       const menu = dd.querySelector(".dd-menu");
       const opening = menu.hidden;
       closeDropdowns(dd);
+      closeMatchPops(null);
       menu.hidden = !opening;
       btn.classList.toggle("open", opening);
     });
@@ -208,7 +228,25 @@
   document.querySelectorAll(".dd-opt").forEach(function (opt) {
     opt.addEventListener("click", function () { selectDdOpt(opt); });
   });
-  document.addEventListener("click", function () { closeDropdowns(null); });
+
+  // --- match-explanation popover (clicking the Exact/Fuzzy pill) ------------
+  document.querySelectorAll("[data-matchinfo]").forEach(function (btn) {
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      const pop = btn.parentElement.querySelector("[data-matchpop]");
+      if (!pop) return;
+      const opening = pop.hidden;
+      closeMatchPops(null);
+      closeDropdowns(null);
+      pop.hidden = !opening;
+      btn.setAttribute("aria-expanded", String(opening));
+    });
+  });
+
+  document.addEventListener("click", function () {
+    closeDropdowns(null);
+    closeMatchPops(null);
+  });
 
   document.querySelectorAll("[data-accept]").forEach(function (b) {
     b.addEventListener("click", function () {
