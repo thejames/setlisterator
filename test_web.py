@@ -252,6 +252,8 @@ def test_preview_renders_matches(client, monkeypatch):
     assert "data-selected" in body
     # spec elements: URL bar + Re-import, custom Add box, count-in-button
     assert 'class="urlbar"' in body and "Re-import" in body
+    # URL bar links out to setlist.fm in a new tab
+    assert 'class="urlbar-link"' in body and 'target="_blank"' in body
     assert 'class="addbox"' in body
     assert "data-create-count" in body
     # matched rows get a manual-search escape hatch (single AND multi rows)
