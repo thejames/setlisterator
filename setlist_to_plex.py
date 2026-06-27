@@ -1009,20 +1009,30 @@ def _record_history(playlist_name, playlist_rating_key, matched_count,
         logger.warning("Could not write history at %s (%s).", hist_file, exc)
 
 
-def _playlist_summary(history_meta, added_count):
+def _playlist_summary(history_meta, added_count, track_count=None):
     """Build the Plex playlist summary text from show metadata.
 
     A self-contained record: how many of the setlist's songs made it in, the
     missing tracks with their likely albums (a built-in buy-list for the show),
     and the setlist.fm source link. Returns "" when there's nothing useful to
     say (no history_meta), so the caller can skip the summary entirely.
+
+    ``added_count`` counts *songs* added (one per setlist song, not
+    deduplicated). ``track_count``, when given, is the number of distinct Plex
+    tracks those songs resolved to; if fewer than ``added_count`` (e.g. two
+    songs that share one recording), the difference is noted so the playlist's
+    item count still makes sense.
     """
     meta = history_meta or {}
     if not meta:
         return ""
     missing = meta.get("missing_tracks", []) or []
     total = added_count + len(missing)
-    lines = [f"{added_count} of {total} song{'' if total == 1 else 's'} added."]
+    note = ""
+    if track_count is not None and track_count < added_count:
+        note = (f" ({track_count} unique track{'' if track_count == 1 else 's'}; "
+                "some songs share a recording)")
+    lines = [f"{added_count} of {total} song{'' if total == 1 else 's'} added{note}."]
 
     # Only tracks with a title render as bullets; count the header off those so
     # "Missing (N):" always matches the number of lines that follow.
@@ -1085,7 +1095,10 @@ def create_playlist(config, name, rating_keys, history_meta=None):
     # Record a self-contained summary (counts, missing-with-albums, source link)
     # on the Plex playlist. Fail-soft so a summary hiccup never undoes a created
     # playlist.
-    summary = _playlist_summary(history_meta, len(tracks))
+    # Count songs (one per setlist pick), not the deduped track list — a medley
+    # or two songs matching the same recording must not shrink the "of N" total
+    # or wrongly trip the full-run note.
+    summary = _playlist_summary(history_meta, len(rating_keys), len(tracks))
     if summary:
         try:
             playlist.editSummary(summary)

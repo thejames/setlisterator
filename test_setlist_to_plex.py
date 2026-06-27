@@ -1075,6 +1075,31 @@ def test_playlist_summary_full_run_when_complete():
     ]
 
 
+def test_playlist_summary_counts_songs_not_deduped_tracks():
+    # Regression: 6 songs all matched but two pairs collapse onto 4 distinct
+    # tracks (e.g. a covers band's bass-solo intro matching its parent song).
+    # The summary must report 6 songs (not 4) and still call it a full run,
+    # while noting the smaller unique-track count so Plex's item count tracks.
+    summary = m._playlist_summary(
+        {"url": "u", "missing_tracks": []}, added_count=6, track_count=4)
+    assert summary.splitlines() == [
+        "6 of 6 songs added (4 unique tracks; some songs share a recording).",
+        "",
+        "This is the full run of the show.",
+        "",
+        "Source: u",
+        "Created by Setlist-er-ator. 🤘",
+    ]
+
+
+def test_playlist_summary_no_track_note_when_one_to_one():
+    # track_count == added_count -> no parenthetical (the common case).
+    summary = m._playlist_summary(
+        {"url": "u", "missing_tracks": []}, added_count=5, track_count=5)
+    assert summary.startswith("5 of 5 songs added.")
+    assert "unique track" not in summary
+
+
 def test_playlist_summary_singular_grammar():
     # One song, and it's missing -> singular "song", no full-run line.
     summary = m._playlist_summary(
