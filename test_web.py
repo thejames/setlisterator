@@ -257,7 +257,7 @@ def test_preview_renders_matches(client, monkeypatch):
     # matched rows get a manual-search escape hatch (single AND multi rows)
     assert 'data-rowsearch="1"' in body              # Tommy (single candidate)
     assert 'data-rowsearch="2"' in body              # Jerry (multi candidate)
-    assert "none right? search" in body
+    assert 'class="rowsearch-btn"' in body           # magnifier toggle by the pill
     assert 'data-rownum="1"' in body and "data-rowtitle" in body
 
 

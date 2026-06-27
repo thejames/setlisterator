@@ -73,8 +73,8 @@
       <tr>
         <th style="text-align:center;width:54px">Add</th>
         <th style="text-align:center;width:46px">#</th>
-        <th style="width:30%">Song title</th><th>Plex track</th>
-        <th style="text-align:right;width:150px">Match</th>
+        <th style="width:24%">Song title</th><th>Plex track</th>
+        <th style="text-align:right;width:208px">Match</th>
       </tr>
       {% for s in result.songs %}
       {% set status = 'missing' if not s.matched else ('multi' if s.candidates|length > 1 else s.quality) %}
@@ -122,8 +122,6 @@
             <input type="hidden" name="pick_{{ s.position }}" value="{{ s.rating_key }}">
           {% endif %}
           {% if s.matched %}
-          <button type="button" class="rowsearch-toggle" data-rowsearch="{{ s.position }}"
-                  style="background:none;border:none;color:var(--blue);font-size:12px;cursor:pointer;padding:6px 0 0">none right? search…</button>
           <div class="rowsearch" data-rowsearch-box="{{ s.position }}" hidden style="margin-top:6px">
             <div class="searchrow" style="margin:0">
               <input type="search" class="q" value="{{ s.title }}" placeholder="search Plex…" aria-label="Search library">
@@ -133,9 +131,18 @@
           </div>
           {% endif %}
         </td>
-        <td style="text-align:right">
-          {% if s.matched %}<span class="sub" style="margin-right:8px">{{ s.tier }}·{{ s.source }}</span>{% endif %}
+        <td>
+          <div class="matchcell">
+          {% if s.matched %}<span class="sub">{{ s.tier }}·{{ s.source }}</span>
+          <button type="button" class="rowsearch-btn" data-rowsearch="{{ s.position }}"
+                  title="Search library" aria-label="Search library">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line>
+            </svg>
+          </button>{% endif %}
           <span class="pill pill-{{ status }}">{% if status == 'multi' %}{{ s.candidates|length }} matches{% elif status == 'missing' %}Missing{% elif status == 'fuzzy' %}Fuzzy{% else %}Exact{% endif %}</span>
+          </div>
         </td>
       </tr>
       {% endfor %}

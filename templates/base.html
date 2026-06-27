@@ -138,6 +138,15 @@
     .pill-fuzzy   { color: var(--accent); background: #E0A33C1f; border: 1px solid #E0A33C3d; }
     .pill-multi   { color: var(--blue);   background: #6E9BF01f; border: 1px solid #6E9BF03d; }
     .pill-missing { color: var(--red);    background: #E0656B1f; border: 1px solid #E0656B3d; }
+    /* Match cell: sub-label + search icon + pill on one line, right-aligned,
+       never stacking even when the pill reads "N matches". */
+    .matchcell { display: flex; align-items: center; justify-content: flex-end;
+      gap: 8px; white-space: nowrap; }
+    .rowsearch-btn { display: inline-flex; align-items: center; justify-content: center;
+      padding: 4px; background: none;
+      border: none; color: var(--muted); cursor: pointer; border-radius: 6px; }
+    .rowsearch-btn:hover, .rowsearch-btn.open { color: var(--blue); background: #6E9BF01f; }
+    .rowsearch-btn svg { display: block; }
 
     /* Section cards (fuzzy / missing summaries) */
     .section-head { display: flex; align-items: center; gap: 10px; margin: 30px 0 13px; }
@@ -223,6 +232,34 @@
     .dd-opt { width: 100%; text-align: left; display: block; border: none;
       background: transparent; border-radius: 7px; padding: 9px 10px; }
     .dd-opt:hover, .dd-opt.sel { background: #23232B; }
+
+    /* Narrow screens: reflow each track row so the Plex-track column drops
+       to a full-width second line below the compact columns. The header row
+       and the tier·source sub-label are hidden to keep the top line legible. */
+    @media (max-width: 640px) {
+      .tracktable { display: block; }
+      .tracktable tr {
+        display: grid;
+        grid-template-columns: auto auto 1fr auto;
+        grid-template-areas:
+          "add num title match"
+          "plex plex plex plex";
+        align-items: center;
+        column-gap: 12px;
+        row-gap: 8px;
+        padding: 12px 16px;
+        border-bottom: 1px solid #1E1E24;
+      }
+      .tracktable tr:first-child { display: none; }      /* column header */
+      .tracktable tr:last-child { border-bottom: none; }
+      .tracktable td { display: block; padding: 0; border: none; }
+      .tracktable td:nth-child(1) { grid-area: add; }
+      .tracktable td:nth-child(2) { grid-area: num; }
+      .tracktable td:nth-child(3) { grid-area: title; }
+      .tracktable td:nth-child(4) { grid-area: plex; }
+      .tracktable td:nth-child(5) { grid-area: match; }
+      .matchcell .sub { display: none; }                 /* tier·source */
+    }
 
     /* Spec: richer Fuzzy / Missing section cards */
     .fuzzycard { display: grid; grid-template-columns: 1fr 22px 1fr 150px;

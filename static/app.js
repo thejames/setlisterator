@@ -95,6 +95,8 @@
     }
     const box = row.querySelector("[data-rowsearch-box]");
     if (box) box.hidden = true;
+    const tgl = row.querySelector('.rowsearch-btn[data-rowsearch="' + pos + '"]');
+    if (tgl) tgl.classList.remove("open");          // clear the magnifier highlight
     row.querySelectorAll(".results").forEach(function (r) { r.textContent = ""; });
     updateCount();
   }
@@ -183,6 +185,7 @@
     function run() { doSearch(box, function (t, l) { applyPick(pos, t, l); }); }
     btn.addEventListener("click", function () {
       box.hidden = !box.hidden;
+      btn.classList.toggle("open", !box.hidden);
       if (!box.hidden && q) q.focus();
     });
     if (go) go.addEventListener("click", run);
