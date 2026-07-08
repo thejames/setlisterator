@@ -10,18 +10,21 @@ with the PORT environment variable.
 
 This app talks to your LOCAL Plex server and carries your Plex token, so it
 binds to 127.0.0.1 only and has no authentication. Do not expose it to a
-network. It reuses the core pipeline from setlist_to_plex.py:
+network. It wraps the core pipeline plus the playlist builder:
 
-    gather_matches()  -> preview (read-only; no playlist is created)
-    create_playlist() -> commit the previewed tracks to a Plex playlist
+    builder.seed_from_setlist() -> a draft seeded from a setlist.fm show
+    builder.search()/add/remove/reorder -> assemble the draft interactively
+    builder.materialize()       -> commit the draft to Plex or YouTube Music
 """
 
 import json
 import os
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, redirect, render_template, request, url_for
 
+import builder as bld
 import setlist_to_plex as core
+import ytm_service as ytm
 
 app = Flask(__name__)
 
@@ -30,18 +33,30 @@ def _error(title, message, status=200):
     return render_template("error.html", title=title, message=message), status
 
 
-def _stats(result):
-    """Counts for the preview stat chips (exclusive: sum == total)."""
-    matched = result["matched"]
-    multi = sum(1 for m in matched if len(m.get("candidates", [])) > 1)
-    single = [m for m in matched if len(m.get("candidates", [])) <= 1]
-    return {
-        "total": len(result["songs"]),
-        "exact": sum(1 for m in single if m.get("quality") == "exact"),
-        "fuzzy": sum(1 for m in single if m.get("quality") == "fuzzy"),
-        "multi": multi,
-        "missing": len(result["missing"]),
-    }
+def _web_config():
+    """Core config plus the YouTube Music OAuth path (raises ConfigError)."""
+    return {**core.load_config(), "ytm_oauth_path": ytm.ytm_oauth_path()}
+
+
+def _load_draft(draft_id):
+    return core.load_drafts().get(draft_id)
+
+
+def _persist(draft):
+    drafts = core.load_drafts()
+    drafts[draft["id"]] = draft
+    core.save_drafts(drafts)
+
+
+def _delete_draft(draft_id):
+    drafts = core.load_drafts()
+    if drafts.pop(draft_id, None) is not None:
+        core.save_drafts(drafts)
+
+
+def _tracklist(draft):
+    """Render the tracklist fragment (with an out-of-band track count)."""
+    return render_template("_tracklist.html", draft=draft, oob=True)
 
 
 @app.get("/")
@@ -50,7 +65,7 @@ def index():
         core.load_config()
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
-    return render_template("index.html")
+    return render_template("index.html", ytm=ytm.load_ytm_config())
 
 
 @app.get("/history")
@@ -109,7 +124,8 @@ def attended():
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
     return render_template("attended.html",
-                           username=os.environ.get("SETLISTFM_USER", ""))
+                           username=os.environ.get("SETLISTFM_USER", ""),
+                           ytm=ytm.load_ytm_config())
 
 
 @app.post("/attended")
@@ -118,6 +134,7 @@ def attended_load():
     username = (request.form.get("username") or "").strip()
     if not username:
         return render_template("attended.html", username="",
+                               ytm=ytm.load_ytm_config(),
                                error="Enter a setlist.fm username.")
     try:
         config = core.load_config()
@@ -125,7 +142,8 @@ def attended_load():
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
     except LookupError as exc:           # unknown / private user
-        return render_template("attended.html", username=username, error=str(exc))
+        return render_template("attended.html", username=username,
+                               ytm=ytm.load_ytm_config(), error=str(exc))
     except (PermissionError, ConnectionError) as exc:
         return _error("setlist.fm problem", str(exc))
     except Exception as exc:             # any other API hiccup
@@ -136,130 +154,163 @@ def attended_load():
     seen = core.load_history(core.history_path())
     for show in shows:
         show["prior"] = seen.get(show.get("id"))
-    return render_template("attended.html", username=username, shows=shows)
+    return render_template("attended.html", username=username, shows=shows,
+                           ytm=ytm.load_ytm_config())
 
 
-@app.get("/search")
-def search():
-    """Search the Plex music library by title; returns JSON for the override UI."""
-    q = (request.args.get("q") or "").strip()
-    if not q:
-        return jsonify(results=[])
-    try:
-        config = core.load_config()
-    except core.ConfigError as exc:
-        return jsonify(error=str(exc)), 400
-    try:
-        plex = core.connect_plex(config["plex_baseurl"], config["plex_token"])
-        section = core.get_music_section(plex, config["music_library"])
-        tracks = section.searchTracks(title=q, maxresults=25)
-    except (PermissionError, ConnectionError, LookupError) as exc:
-        return jsonify(error=str(exc)), 502
-    except Exception as exc:  # any other Plex hiccup
-        return jsonify(error=f"Search failed: {exc}"), 502
+# ---------------------------------------------------------------------------
+# Playlist builder
+# ---------------------------------------------------------------------------
 
-    results = [{
-        "rating_key": getattr(t, "ratingKey", None),
-        "title": t.title,
-        "artist": core._track_artist_name(t),
-        "album": core._track_album(t),
-    } for t in tracks]
-    return jsonify(results=results)
-
-
-@app.post("/preview")
-def preview():
-    """Match the setlist and show the result without creating anything."""
+@app.post("/builder/seed")
+def builder_seed():
+    """Create a draft — seeded from a setlist, or empty — and open it."""
+    service = "ytm" if request.form.get("service") == "ytm" else "plex"
     setlist_arg = (request.form.get("setlist") or "").strip()
     name = (request.form.get("name") or "").strip() or None
-    # Absent (first preview) -> None -> auto-detect a cohesive album; present
-    # (incl. "" for "No preference") -> use it verbatim.
     prefer_album = request.form.get("prefer_album")
-    if not setlist_arg:
-        return _error("Missing input", "Enter a setlist.fm URL or ID.", 400)
 
+    if service == "ytm" and not ytm.load_ytm_config()["available"]:
+        return _error("YouTube Music unavailable",
+                      ytm.load_ytm_config()["reason"])
     try:
-        config = core.load_config()
-        setlist_id = core.parse_setlist_id(setlist_arg)
-        result = core.gather_matches(config, setlist_id, name, prefer_album)
+        config = _web_config()
+        if setlist_arg:
+            draft = bld.seed_from_setlist(config, service, setlist_arg,
+                                          name, prefer_album)
+        else:
+            draft = bld.empty_draft(service, name or "")
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
     except ValueError as exc:
         return _error("Couldn't read that setlist", str(exc), 400)
     except core.SetlistError as exc:
         return _error("Setlist problem", str(exc))
-    except core.PlexError as exc:
-        return _error("Plex problem", str(exc))
+    except (core.PlexError, ytm.YTMError) as exc:
+        return _error("Music service problem", str(exc))
 
-    prior = core.load_history(core.history_path()).get(result["setlist_id"])
-    return render_template(
-        "preview.html", result=result, prior=prior, stats=_stats(result),
-        missing_json=json.dumps(result["missing"]),
-        fuzzy_json=json.dumps(result["fuzzy"]))
+    _persist(draft)
+    return redirect(url_for("builder_open", draft_id=draft["id"]))
 
 
-@app.post("/create")
-def create():
-    """Build the Plex playlist from the previewed (matched) rating keys."""
-    name = (request.form.get("name") or "").strip()
-    setlist_id = (request.form.get("setlist_id") or "").strip()
-    rating_keys = _picked_rating_keys()
-    if not name:
-        return _error("Missing name", "A playlist name is required.", 400)
-    if not rating_keys:
-        return _error("Nothing to create", "No matched tracks to add.", 400)
+@app.get("/builder/<draft_id>")
+def builder_open(draft_id):
+    """Render the builder for a draft."""
+    draft = _load_draft(draft_id)
+    if draft is None:
+        return _error("Draft not found",
+                      "That draft is gone (already saved, or discarded). "
+                      "Start a new one.")
+    return render_template("builder.html", draft=draft,
+                           service_label=_SERVICE_LABEL[draft["service"]])
 
-    history_meta = _history_meta_from_form(setlist_id)
+
+@app.get("/builder/<draft_id>/search")
+def builder_search(draft_id):
+    """Search the draft's service catalog; return result-row fragments."""
+    draft = _load_draft(draft_id)
+    if draft is None:
+        return "", 404
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return ""   # clear the results area
     try:
-        config = core.load_config()
-        final_name = core.create_playlist(config, name, rating_keys, history_meta)
+        results = bld.search(_web_config(), draft["service"], q)
+    except core.ConfigError as exc:
+        return f'<p class="hint">{exc}</p>', 200
+    except (PermissionError, ConnectionError, LookupError,
+            core.PlexError, ytm.YTMError) as exc:
+        return f'<p class="hint">Search failed: {exc}</p>', 200
+    except Exception as exc:  # any other backend hiccup
+        return f'<p class="hint">Search failed: {exc}</p>', 200
+    return render_template("_search_results.html", results=results, draft=draft)
+
+
+@app.post("/builder/<draft_id>/add")
+def builder_add(draft_id):
+    """Append a chosen search result to the draft."""
+    draft = _load_draft(draft_id)
+    if draft is None:
+        return "", 404
+    bld.add_track(draft, {
+        "track_id": request.form.get("track_id", ""),
+        "title": request.form.get("title", ""),
+        "artist": request.form.get("artist", ""),
+        "album": request.form.get("album", ""),
+    })
+    _persist(draft)
+    return _tracklist(draft)
+
+
+@app.post("/builder/<draft_id>/remove")
+def builder_remove(draft_id):
+    """Remove a track by its 0-based index."""
+    draft = _load_draft(draft_id)
+    if draft is None:
+        return "", 404
+    try:
+        index = int(request.form.get("index", ""))
+    except ValueError:
+        index = -1
+    bld.remove_track(draft, index)
+    _persist(draft)
+    return _tracklist(draft)
+
+
+@app.post("/builder/<draft_id>/reorder")
+def builder_reorder(draft_id):
+    """Reorder tracks to the comma-separated permutation of indices."""
+    draft = _load_draft(draft_id)
+    if draft is None:
+        return "", 404
+    raw = request.form.get("order", "")
+    try:
+        order = [int(i) for i in raw.split(",") if i != ""]
+    except ValueError:
+        order = []
+    bld.reorder_tracks(draft, order)
+    _persist(draft)
+    return _tracklist(draft)
+
+
+@app.post("/builder/<draft_id>/save")
+def builder_save(draft_id):
+    """Materialize the draft into a playlist on its service, then delete it."""
+    draft = _load_draft(draft_id)
+    if draft is None:
+        return _error("Draft not found", "That draft is gone. Start a new one.")
+    name = (request.form.get("name") or "").strip()
+    if name:
+        draft["name"] = name
+    if not draft["tracks"]:
+        return _error("Nothing to save", "Add at least one track first.", 400)
+    try:
+        final_name = bld.materialize(_web_config(), draft)
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
-    except core.PlexError as exc:
-        return _error("Plex problem", str(exc))
+    except (core.PlexError, ytm.YTMError) as exc:
+        return _error("Music service problem", str(exc))
 
-    # Dedupe to match what create_playlist actually adds (e.g. a medley track
-    # chosen for two songs lands in the playlist once).
-    added = len(dict.fromkeys(rating_keys))
-    return render_template("created.html", name=final_name, added=added,
-                           missing=history_meta["missing_tracks"])
-
-
-def _picked_rating_keys():
-    """Collect included rows' pick_<position> values, in setlist order."""
-    included = {int(p) for p in request.form.getlist("include") if p.isdigit()}
-    keys = []
-    for pos in sorted(included):
-        key = request.form.get(f"pick_{pos}")
-        if key:
-            keys.append(key)
-    return keys
+    _delete_draft(draft_id)
+    missing = (draft.get("seed") or {}).get("missing_tracks", [])
+    return render_template("created.html", name=final_name,
+                           added=len(draft["tracks"]), missing=missing,
+                           service_label=_SERVICE_LABEL[draft["service"]])
 
 
-def _history_meta_from_form(setlist_id):
-    """Build history_meta (incl. missing_tracks) from the hidden form fields."""
-    try:
-        missing = json.loads(request.form.get("missing_json") or "[]")
-    except ValueError:
-        missing = []
-    try:
-        song_count = int(request.form.get("song_count") or 0)
-    except ValueError:
-        song_count = 0
-    return {
-        "id": setlist_id,
-        "url": request.form.get("url", ""),
-        "artist": request.form.get("artist", ""),
-        "date": request.form.get("date", ""),
-        "song_count": song_count,
-        "missing": len(missing),
-        # missing rows are [position, artist, title, album?]; carry position+album.
-        "missing_tracks": [
-            {"position": row[0], "artist": row[1], "title": row[2],
-             "album": (row[3] if len(row) > 3 else "")}
-            for row in missing if len(row) >= 3],
-    }
+@app.post("/builder/<draft_id>/discard")
+def builder_discard(draft_id):
+    """Throw a draft away."""
+    _delete_draft(draft_id)
+    return redirect(url_for("index"))
 
+
+_SERVICE_LABEL = {"plex": "Plex", "ytm": "YouTube Music"}
+
+
+# ---------------------------------------------------------------------------
+# Update an existing (Plex) playlist — add-only top-up, unchanged flow
+# ---------------------------------------------------------------------------
 
 @app.post("/update-preview")
 def update_preview():
@@ -336,6 +387,42 @@ def update():
         return _error("Plex problem", str(exc))
 
     return render_template("updated.html", name=title, added=added)
+
+
+def _picked_rating_keys():
+    """Collect included rows' pick_<position> values, in setlist order."""
+    included = {int(p) for p in request.form.getlist("include") if p.isdigit()}
+    keys = []
+    for pos in sorted(included):
+        key = request.form.get(f"pick_{pos}")
+        if key:
+            keys.append(key)
+    return keys
+
+
+def _history_meta_from_form(setlist_id):
+    """Build history_meta (incl. missing_tracks) from the hidden form fields."""
+    try:
+        missing = json.loads(request.form.get("missing_json") or "[]")
+    except ValueError:
+        missing = []
+    try:
+        song_count = int(request.form.get("song_count") or 0)
+    except ValueError:
+        song_count = 0
+    return {
+        "id": setlist_id,
+        "url": request.form.get("url", ""),
+        "artist": request.form.get("artist", ""),
+        "date": request.form.get("date", ""),
+        "song_count": song_count,
+        "missing": len(missing),
+        # missing rows are [position, artist, title, album?]; carry position+album.
+        "missing_tracks": [
+            {"position": row[0], "artist": row[1], "title": row[2],
+             "album": (row[3] if len(row) > 3 else "")}
+            for row in missing if len(row) >= 3],
+    }
 
 
 def _port():

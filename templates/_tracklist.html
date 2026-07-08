@@ -1,0 +1,22 @@
+{# Ordered draft tracklist. Included on full load; returned by add/remove/reorder.
+   As a fragment (oob=True) it also swaps the action-bar count out-of-band. #}
+{% if oob %}<b id="track-count" hx-swap-oob="true">{{ draft.tracks|length }}</b>{% endif %}
+<ul id="tracklist" class="tracklist"
+    data-reorder-url="{{ url_for('builder_reorder', draft_id=draft.id) }}">
+  {% for t in draft.tracks %}
+  <li data-index="{{ loop.index0 }}">
+    <span class="drag-handle" title="Drag to reorder">⠿</span>
+    <span class="tnum num">{{ loop.index }}</span>
+    <span class="tmeta">
+      <span class="trunc ttitle">{{ t.title or "(untitled)" }}</span>
+      <span class="trunc sub">{{ t.artist }}{% if t.album %} · {{ t.album }}{% endif %}</span>
+    </span>
+    <button type="button" class="trm" title="Remove"
+            hx-post="{{ url_for('builder_remove', draft_id=draft.id) }}"
+            hx-vals='{"index": {{ loop.index0 }}}'
+            hx-target="#tracklist" hx-swap="outerHTML">✕</button>
+  </li>
+  {% else %}
+  <li class="empty">Nothing here yet — search below to add tracks.</li>
+  {% endfor %}
+</ul>

@@ -1,20 +1,49 @@
 {% extends "base.html" %}
+{% block head %}
+<style>
+  .dest { display:flex; gap:10px; margin:6px 0 4px; }
+  .dest label { flex:1; margin:0; display:block; cursor:pointer; }
+  .dest input { position:absolute; opacity:0; }
+  .dest .opt { display:flex; flex-direction:column; gap:2px; padding:12px 14px;
+    background:var(--panel2); border:1px solid var(--border); border-radius:10px;
+    color:var(--text); font-weight:600; }
+  .dest .opt .s { font-size:12px; color:var(--muted); font-weight:400; }
+  .dest input:checked + .opt { border-color:var(--accent); background:#E0A33C12; }
+  .dest input:disabled + .opt { opacity:.5; cursor:not-allowed; }
+</style>
+{% endblock %}
 {% block content %}
-<div style="max-width:560px;margin:8vh auto 0;">
+<div style="max-width:560px;margin:7vh auto 0;">
   <div class="panel" style="padding:28px 26px">
-    <form method="post" action="{{ url_for('preview') }}" data-loading="Matching the setlist…">
-      <label>setlist.fm URL or ID
-        <input name="setlist" autofocus required
+    <form method="post" action="{{ url_for('builder_seed') }}"
+          data-loading="Building…">
+      <div class="label">Destination</div>
+      <div class="dest">
+        <label>
+          <input type="radio" name="service" value="plex" checked>
+          <span class="opt">Plex <span class="s">your library</span></span>
+        </label>
+        <label>
+          <input type="radio" name="service" value="ytm"
+                 {% if not ytm.available %}disabled{% endif %}>
+          <span class="opt" {% if not ytm.available %}title="{{ ytm.reason }}"{% endif %}>
+            YouTube Music <span class="s">{{ "streaming catalog" if ytm.available else "not configured" }}</span>
+          </span>
+        </label>
+      </div>
+
+      <label>Seed from a setlist.fm show <span style="font-weight:400;color:var(--faint)">(optional)</span>
+        <input name="setlist" autofocus
                placeholder="https://www.setlist.fm/…  or  6b756686">
       </label>
       <label>Playlist name <span style="font-weight:400;color:var(--faint)">(optional)</span>
-        <input name="name" placeholder="auto-generated from the show">
+        <input name="name" placeholder="auto-generated, or name your own">
       </label>
-      <button type="submit" class="btn-accent" style="margin-top:8px">Preview</button>
+      <button type="submit" class="btn-accent" style="margin-top:8px">Open builder →</button>
     </form>
   </div>
-  <p class="hint" style="margin-top:16px;text-align:center">Matches the show
-    against your Plex library and shows what it found — nothing is created until
-    you confirm.</p>
+  <p class="hint" style="margin-top:16px;text-align:center">Seed from a show to
+    start with its songs matched, or leave it blank to build from scratch — then
+    search, arrange, and save. Nothing is created until you hit Save.</p>
 </div>
 {% endblock %}

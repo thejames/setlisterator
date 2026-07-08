@@ -36,7 +36,7 @@
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         {% if s.prior %}
         <span class="pill pill-exact">created ✓</span>
-        <form method="post" action="{{ url_for('preview') }}" style="margin:0"
+        <form method="post" action="{{ url_for('builder_seed') }}" style="margin:0"
               data-loading="Matching…">
           <input type="hidden" name="setlist" value="{{ s.url or s.id }}">
           <button type="submit">Re-open</button>
@@ -50,10 +50,10 @@
           <button type="submit">Update</button>
         </form>
         {% else %}
-        <form method="post" action="{{ url_for('preview') }}" style="margin:0"
+        <form method="post" action="{{ url_for('builder_seed') }}" style="margin:0"
               data-loading="Matching…">
           <input type="hidden" name="setlist" value="{{ s.url or s.id }}">
-          <button type="submit" class="btn-accent">Preview</button>
+          <button type="submit" class="btn-accent">Build</button>
         </form>
         {% endif %}
         {% if s.url %}

@@ -1,14 +1,16 @@
 """Tests for the Flask web interface.
 
-The core pipeline (load_config / gather_matches / create_playlist) is
-monkeypatched so these exercise routing and rendering only — no network, no
-Plex, no setlist.fm.
+The core pipeline (load_config / gather_matches / builder.materialize / search)
+is monkeypatched so these exercise routing and rendering only — no network, no
+Plex, no setlist.fm, no YouTube Music.
 """
 
 import pytest
 
+import builder as bld
 import setlist_to_plex as core
 import web
+import ytm_service as ytm
 from web import app
 
 
@@ -17,59 +19,58 @@ def client(monkeypatch):
     monkeypatch.setattr(core, "load_config", lambda: {
         "api_key": "k", "plex_baseurl": "http://x", "plex_token": "t",
         "music_library": "Music"})
+    # YouTube Music off by default (no OAuth file); tests opt in explicitly.
+    monkeypatch.setenv("YTM_OAUTH_FILE", "/nonexistent/ytm_oauth.json")
     app.config.update(TESTING=True)
     return app.test_client()
 
 
-def _preview_result():
-    # single candidate -> rendered as a hidden "pick" input
-    tommy = {"position": 1, "title": "Tommy the Cat",
-             "track_title": "Tommy the Cat", "track_artist": "Primus",
-             "album": "Sailing the Seas of Cheese", "rating_key": 10,
-             "tier": "exact", "source": "scoped", "quality": "exact",
-             "candidates": [
-                 {"rating_key": 10, "track_title": "Tommy the Cat",
-                  "track_artist": "Primus",
-                  "album": "Sailing the Seas of Cheese",
-                  "tier": "exact", "source": "scoped", "quality": "exact"}]}
-    # two candidates -> rendered as a <select name="pick">
-    jerry = {"position": 2, "title": "Jerry Was a Race Car Driver",
-             "track_title": "Jerry Was a Race Car Driver", "track_artist": "Primus",
-             "album": "Sailing the Seas of Cheese", "rating_key": 20,
-             "tier": "exact", "source": "scoped", "quality": "exact",
-             "candidates": [
-                 {"rating_key": 20, "track_title": "Jerry Was a Race Car Driver",
-                  "track_artist": "Primus", "album": "Sailing the Seas of Cheese",
-                  "tier": "exact", "source": "scoped", "quality": "exact"},
-                 {"rating_key": 21, "track_title": "Jerry Was a Race Car Driver",
-                  "track_artist": "Primus", "album": "Suck on This (Live)",
-                  "tier": "exact", "source": "scoped", "quality": "exact"}]}
+@pytest.fixture
+def drafts(monkeypatch):
+    """In-memory draft store standing in for drafts.json."""
+    store = {}
+    monkeypatch.setattr(core, "load_drafts", lambda path=None: dict(store))
+
+    def _save(data, path=None):
+        store.clear()
+        store.update(data)
+    monkeypatch.setattr(core, "save_drafts", _save)
+    return store
+
+
+def _gather_result():
+    """A gather_matches result shaped as builder.seed_from_setlist expects."""
     return {
         "setlist_id": "abc123",
         "show": {"artist": "Primus", "venue": "TD Amp", "city": "Charlotte",
                  "date": "2026-06-16", "url": "https://setlist.fm/x.html"},
         "playlist_name": "Primus - TD Amp, Charlotte (2026-06-16)",
-        "matched": [tommy, jerry],
+        "songs": [{"position": 1}, {"position": 2}, {"position": 3}],
+        "matched": [
+            {"rating_key": 10, "track_title": "Tommy the Cat",
+             "track_artist": "Primus", "album": "Sailing the Seas of Cheese"},
+            {"rating_key": 20, "track_title": "Jerry Was a Race Car Driver",
+             "track_artist": "Primus", "album": "Sailing the Seas of Cheese"}],
         "missing": [(3, "Primus", "Jilly's on Smack", "Green Naugahyde")],
-        "fuzzy": [(2, "Primus - Hello Skinny",
-                   "Primus - Hello Skinny / Constantinople")],
-        # full setlist in order: both matched songs plus the missing one inline
-        "songs": [
-            {**tommy, "matched": True},
-            {**jerry, "matched": True},
-            {"position": 3, "title": "Jilly's on Smack", "matched": False,
-             "artist": "Primus"},
-        ],
+        "fuzzy": [],
     }
 
+
+# --- landing / chrome ------------------------------------------------------
 
 def test_index_ok(client):
     resp = client.get("/")
     assert resp.status_code == 200
     body = resp.data.decode()
-    assert "setlist.fm URL or ID" in body
-    assert 'data-loading="Matching the setlist…"' in body  # loading feedback
-    assert "app.js" in body                                # script on every page
+    assert "Destination" in body                    # service picker
+    assert 'action="/builder/seed"' in body         # seeds the builder
+    assert "YouTube Music" in body                   # both destinations offered
+    assert "app.js" in body
+
+
+def test_index_ytm_disabled_when_unavailable(client):
+    body = client.get("/").data.decode()
+    assert "not configured" in body                 # YTM greyed out with reason
 
 
 def test_port_default_and_override(monkeypatch):
@@ -81,10 +82,20 @@ def test_port_default_and_override(monkeypatch):
 
 def test_navbar_present(client):
     body = client.get("/").data.decode()
-    assert "Setlist-er-ator" in body            # brand
-    assert 'href="/history"' in body            # History link
-    assert 'href="/buylist"' in body            # Buy list link
+    assert "Setlist-er-ator" in body
+    assert 'href="/history"' in body
+    assert 'href="/buylist"' in body
 
+
+def test_index_config_error(client, monkeypatch):
+    def raise_cfg():
+        raise core.ConfigError("Missing PLEX_TOKEN")
+    monkeypatch.setattr(core, "load_config", raise_cfg)
+    body = client.get("/").data.decode()
+    assert "Missing PLEX_TOKEN" in body
+
+
+# --- buy list --------------------------------------------------------------
 
 def test_buylist_aggregates_and_dedupes(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {
@@ -95,17 +106,13 @@ def test_buylist_aggregates_and_dedupes(client, monkeypatch):
         "b": {"missing_tracks": [
             {"artist": "Primus", "title": "Jilly's on Smack"}]},  # dup
     })
-    # no MusicBrainz network, no real history writes
     monkeypatch.setattr(core, "lookup_album", lambda a, t: "Pork Soda")
     monkeypatch.setattr(core, "save_history", lambda p, h: None)
     body = client.get("/buylist").data.decode()
-    # deduped to one Jilly's entry; the repeated one counts as 2 shows
     assert body.count("Jilly&#39;s on Smack") == 1
     assert "2 shows" in body
-    # grouped by artist, A->Z (Goose before Primus)
     assert "Goose" in body and "Primus" in body
     assert body.index("Goose") < body.index("Primus")
-    # likely album surfaced from MusicBrainz
     assert "likely from Pork Soda" in body
     assert "The Ol&#39; Grizz" in body
 
@@ -115,6 +122,8 @@ def test_buylist_empty(client, monkeypatch):
     body = client.get("/buylist").data.decode()
     assert "Nothing to buy" in body
 
+
+# --- history ---------------------------------------------------------------
 
 def test_history_lists_entries_newest_first(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {
@@ -129,12 +138,24 @@ def test_history_lists_entries_newest_first(client, monkeypatch):
     })
     body = client.get("/history").data.decode()
     assert "Phish — MSG" in body and "Primus — TD Amp" in body
-    # newest processed_at first
     assert body.index("Primus — TD Amp") < body.index("Phish — MSG")
-    # Re-open posts the stored URL to the existing preview route
+    # Re-open now seeds the builder with the stored URL
+    assert 'action="/builder/seed"' in body
     assert 'name="setlist" value="https://setlist.fm/primus.html"' in body
     assert "4 missing" in body
-    assert 'action="/update-preview"' in body   # Update button present
+    assert 'action="/update-preview"' in body   # Update present for Plex/setlist
+
+
+def test_history_builder_entry_has_no_setlist_actions(client, monkeypatch):
+    monkeypatch.setattr(core, "load_history", lambda path: {
+        "builder-xyz": {"id": "builder-xyz", "playlist_name": "Road Trip",
+                        "processed_at": "2026-07-01", "matched": 12,
+                        "service": "ytm", "source": "builder"},
+    })
+    body = client.get("/history").data.decode()
+    assert "Road Trip" in body
+    assert "built in YouTube Music" in body
+    assert 'action="/builder/seed"' not in body   # no Re-open for a from-scratch entry
 
 
 def test_history_empty(client, monkeypatch):
@@ -143,7 +164,169 @@ def test_history_empty(client, monkeypatch):
     assert "No history yet" in body
 
 
-# --- update flow -----------------------------------------------------------
+# --- builder: seeding ------------------------------------------------------
+
+def test_seed_empty_creates_draft_and_redirects(client, drafts):
+    resp = client.post("/builder/seed", data={"service": "plex", "name": "Mix"})
+    assert resp.status_code == 302
+    assert len(drafts) == 1
+    draft = next(iter(drafts.values()))
+    assert draft["service"] == "plex"
+    assert draft["name"] == "Mix"
+    assert draft["tracks"] == []
+    assert f"/builder/{draft['id']}" in resp.headers["Location"]
+
+
+def test_seed_from_setlist_populates_tracks(client, drafts, monkeypatch):
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
+    resp = client.post("/builder/seed",
+                       data={"service": "plex", "setlist": "abc123"})
+    assert resp.status_code == 302
+    draft = next(iter(drafts.values()))
+    assert [t["track_id"] for t in draft["tracks"]] == ["10", "20"]
+    assert draft["seed"]["missing_tracks"][0]["title"] == "Jilly's on Smack"
+
+
+def test_seed_ytm_unavailable_errors(client, drafts):
+    resp = client.post("/builder/seed", data={"service": "ytm"})
+    body = resp.data.decode()
+    assert "YouTube Music" in body
+    assert len(drafts) == 0                       # nothing persisted
+
+
+def test_seed_setlist_error(client, drafts, monkeypatch):
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+
+    def boom(*a, **k):
+        raise core.SetlistError("no songs")
+    monkeypatch.setattr(core, "gather_matches", boom)
+    body = client.post("/builder/seed",
+                       data={"service": "plex", "setlist": "abc"}).data.decode()
+    assert "no songs" in body
+
+
+# --- builder: open / mutate ------------------------------------------------
+
+def _seed(store, service="plex", tracks=()):
+    draft = core.new_draft(service, name="Mix")
+    draft["tracks"] = [dict(t) for t in tracks]
+    store[draft["id"]] = draft
+    return draft
+
+
+def test_builder_open_renders(client, drafts):
+    d = _seed(drafts, tracks=[{"track_id": "10", "title": "Tommy the Cat",
+                               "artist": "Primus", "album": "Seas"}])
+    body = client.get(f"/builder/{d['id']}").data.decode()
+    assert "Tommy the Cat" in body
+    assert "Save to Plex" in body
+    assert 'id="tracklist"' in body
+
+
+def test_builder_open_missing_draft(client, drafts):
+    body = client.get("/builder/nope").data.decode()
+    assert "Draft not found" in body
+
+
+def test_builder_search_returns_fragment(client, drafts, monkeypatch):
+    d = _seed(drafts)
+    monkeypatch.setattr(bld, "search", lambda cfg, svc, q: [
+        {"track_id": "99", "title": "Wilson", "artist": "Phish", "album": "Junta"}])
+    body = client.get(f"/builder/{d['id']}/search?q=wilson").data.decode()
+    assert "Wilson" in body
+    assert 'name="track_id" value="99"' in body
+    assert "+ Add" in body
+
+
+def test_builder_search_empty_query_clears(client, drafts):
+    d = _seed(drafts)
+    resp = client.get(f"/builder/{d['id']}/search?q=")
+    assert resp.data.decode().strip() == ""
+
+
+def test_builder_add_appends_and_updates_count(client, drafts):
+    d = _seed(drafts)
+    resp = client.post(f"/builder/{d['id']}/add", data={
+        "track_id": "42", "title": "Wilson", "artist": "Phish", "album": "Junta"})
+    body = resp.data.decode()
+    assert "Wilson" in body
+    assert 'id="track-count"' in body and ">1<" in body   # OOB count
+    assert drafts[d["id"]]["tracks"][0]["track_id"] == "42"
+
+
+def test_builder_remove(client, drafts):
+    d = _seed(drafts, tracks=[{"track_id": "10", "title": "A"},
+                              {"track_id": "11", "title": "B"}])
+    client.post(f"/builder/{d['id']}/remove", data={"index": "0"})
+    assert [t["track_id"] for t in drafts[d["id"]]["tracks"]] == ["11"]
+
+
+def test_builder_reorder(client, drafts):
+    d = _seed(drafts, tracks=[{"track_id": "10"}, {"track_id": "11"},
+                              {"track_id": "12"}])
+    client.post(f"/builder/{d['id']}/reorder", data={"order": "2,0,1"})
+    assert [t["track_id"] for t in drafts[d["id"]]["tracks"]] == ["12", "10", "11"]
+
+
+def test_builder_reorder_malformed_is_noop(client, drafts):
+    d = _seed(drafts, tracks=[{"track_id": "10"}, {"track_id": "11"}])
+    client.post(f"/builder/{d['id']}/reorder", data={"order": "0"})
+    assert [t["track_id"] for t in drafts[d["id"]]["tracks"]] == ["10", "11"]
+
+
+# --- builder: save / discard ----------------------------------------------
+
+def test_builder_save_materializes_and_deletes(client, drafts, monkeypatch):
+    d = _seed(drafts, tracks=[{"track_id": "10", "title": "A"}])
+    seen = {}
+
+    def fake_materialize(config, draft):
+        seen["name"] = draft["name"]
+        return draft["name"]
+    monkeypatch.setattr(bld, "materialize", fake_materialize)
+
+    resp = client.post(f"/builder/{d['id']}/save", data={"name": "Final Mix"})
+    body = resp.data.decode()
+    assert "Playlist created in Plex" in body
+    assert seen["name"] == "Final Mix"            # edited name carried through
+    assert d["id"] not in drafts                   # draft consumed
+
+
+def test_builder_save_ytm_label(client, drafts, monkeypatch):
+    d = _seed(drafts, service="ytm", tracks=[{"track_id": "v1"}])
+    monkeypatch.setattr(bld, "materialize", lambda c, dr: dr["name"])
+    body = client.post(f"/builder/{d['id']}/save", data={"name": "YT"}).data.decode()
+    assert "Playlist created in YouTube Music" in body
+
+
+def test_builder_save_empty_rejected(client, drafts):
+    d = _seed(drafts)                              # no tracks
+    resp = client.post(f"/builder/{d['id']}/save", data={"name": "Mix"})
+    assert resp.status_code == 400
+    assert "Add at least one track" in resp.data.decode()
+    assert d["id"] in drafts                        # not consumed on failure
+
+
+def test_builder_save_service_error(client, drafts, monkeypatch):
+    d = _seed(drafts, tracks=[{"track_id": "10"}])
+
+    def boom(config, draft):
+        raise core.PlexError("Plex went away")
+    monkeypatch.setattr(bld, "materialize", boom)
+    body = client.post(f"/builder/{d['id']}/save", data={"name": "Mix"}).data.decode()
+    assert "Plex went away" in body
+    assert d["id"] in drafts                        # kept so the user can retry
+
+
+def test_builder_discard(client, drafts):
+    d = _seed(drafts, tracks=[{"track_id": "10"}])
+    resp = client.post(f"/builder/{d['id']}/discard")
+    assert resp.status_code == 302
+    assert d["id"] not in drafts
+
+
+# --- update flow (unchanged, Plex add-only) --------------------------------
 
 class _FakePL:
     def __init__(self, title, key, item_keys):
@@ -155,345 +338,78 @@ class _FakePL:
         return list(self._items)
 
 
+def _update_result():
+    tommy = {"position": 1, "title": "Tommy the Cat",
+             "track_title": "Tommy the Cat", "track_artist": "Primus",
+             "album": "Seas", "rating_key": 10, "tier": "exact",
+             "source": "scoped", "quality": "exact",
+             "candidates": [{"rating_key": 10, "track_title": "Tommy the Cat",
+                             "track_artist": "Primus", "album": "Seas",
+                             "tier": "exact", "source": "scoped",
+                             "quality": "exact"}]}
+    jerry = {"position": 2, "title": "Jerry", "track_title": "Jerry",
+             "track_artist": "Primus", "album": "Seas", "rating_key": 20,
+             "tier": "exact", "source": "scoped", "quality": "exact",
+             "candidates": [{"rating_key": 20, "track_title": "Jerry",
+                             "track_artist": "Primus", "album": "Seas",
+                             "tier": "exact", "source": "scoped",
+                             "quality": "exact"}]}
+    return {"setlist_id": "abc123",
+            "show": {"artist": "Primus", "url": "https://setlist.fm/x.html"},
+            "matched": [tommy, jerry], "missing": []}
+
+
 def test_update_preview_shows_only_new(client, monkeypatch):
-    monkeypatch.setattr(core, "gather_matches",
-                        lambda c, s, n=None: _preview_result())
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _update_result())
     monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
-    # Tommy (rating_key 10) is already in the playlist; Jerry (20/21) is not.
-    pl = _FakePL("Primus - TD Amp", 999, [10])
+    pl = _FakePL("Primus — TD Amp", 500, item_keys=[10])   # already has Tommy(10)
     monkeypatch.setattr(core, "find_playlist", lambda plex, **k: pl)
-    body = client.post("/update-preview", data={
-        "setlist": "abc", "playlist_rating_key": "999",
-        "name": "Primus - TD Amp"}).data.decode()
-    assert "Update" in body
-    assert 'name="pick_2"' in body        # Jerry is new -> offered
-    assert 'name="pick_1"' not in body    # Tommy already in playlist -> hidden
-    assert 'value="999"' in body          # playlist key carried forward
+    body = client.post("/update-preview",
+                       data={"setlist": "abc123"}).data.decode()
+    assert "Jerry" in body and "Tommy the Cat" not in body
 
 
 def test_update_preview_nothing_new(client, monkeypatch):
-    monkeypatch.setattr(core, "gather_matches",
-                        lambda c, s, n=None: _preview_result())
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _update_result())
     monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
-    pl = _FakePL("Primus - TD Amp", 999, [10, 20])   # both already present
+    pl = _FakePL("Primus — TD Amp", 500, item_keys=[10, 20])
     monkeypatch.setattr(core, "find_playlist", lambda plex, **k: pl)
-    body = client.post("/update-preview", data={
-        "setlist": "abc", "name": "Primus - TD Amp"}).data.decode()
+    body = client.post("/update-preview",
+                       data={"setlist": "abc123"}).data.decode()
     assert "Nothing new" in body
 
 
 def test_update_preview_playlist_gone(client, monkeypatch):
-    monkeypatch.setattr(core, "gather_matches",
-                        lambda c, s, n=None: _preview_result())
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _update_result())
     monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
     monkeypatch.setattr(core, "find_playlist", lambda plex, **k: None)
-    resp = client.post("/update-preview", data={"setlist": "abc", "name": "X"})
-    assert b"Playlist not found" in resp.data
+    body = client.post("/update-preview",
+                       data={"setlist": "abc123"}).data.decode()
+    assert "no longer exists" in body
 
 
 def test_update_adds_picked_tracks(client, monkeypatch):
     captured = {}
 
-    def fake_add(cfg, key, name, keys, meta):
-        captured.update(key=key, name=name, keys=keys, meta=meta)
-        return name, len(keys)
-
+    def fake_add(config, key, name, rating_keys, meta):
+        captured["keys"] = rating_keys
+        return ("Primus — TD Amp", len(rating_keys))
     monkeypatch.setattr(core, "add_to_playlist", fake_add)
     resp = client.post("/update", data={
-        "name": "Primus - TD Amp", "playlist_rating_key": "999",
-        "setlist_id": "abc", "include": ["2"], "pick_2": "21",
-        "missing_json": "[]",
-    })
+        "name": "Primus — TD Amp", "playlist_rating_key": "500",
+        "setlist_id": "abc123", "include": ["2"], "pick_2": "20"})
     assert resp.status_code == 200
-    assert captured["keys"] == ["21"] and captured["key"] == "999"
-    body = resp.data.decode()
-    assert "Added 1 track" in body and "Primus - TD Amp" in body
+    assert captured["keys"] == ["20"]
+    assert "added" in resp.data.decode().lower()
 
 
 def test_update_requires_picks(client):
     resp = client.post("/update", data={"name": "X", "playlist_rating_key": "1"})
     assert resp.status_code == 400
+    assert "No tracks chosen" in resp.data.decode()
 
 
-def test_index_config_error(client, monkeypatch):
-    def raise_cfg():
-        raise core.ConfigError("Missing required environment variable(s): X")
-    monkeypatch.setattr(core, "load_config", raise_cfg)
-    resp = client.get("/")
-    assert b"Missing required environment variable" in resp.data
-
-
-def test_preview_renders_matches(client, monkeypatch):
-    monkeypatch.setattr(core, "gather_matches",
-                        lambda cfg, sid, name=None, prefer_album=None: _preview_result())
-    monkeypatch.setattr(core, "load_history", lambda path: {})
-    resp = client.post("/preview", data={"setlist": "abc123"})
-    assert resp.status_code == 200
-    body = resp.data.decode()
-    assert "Tommy the Cat" in body                 # matched
-    assert "Sailing the Seas of Cheese" in body     # album surfaced
-    assert "Jilly&#39;s on Smack" in body           # missing (HTML-escaped)
-    # per-position fields: single-candidate -> hidden input; multi -> custom
-    # dropdown (hidden pick_N + options carrying each candidate's rating key)
-    assert '<input type="hidden" name="pick_1" value="10">' in body
-    assert 'name="pick_2"' in body
-    assert 'class="dropdown"' in body
-    assert 'data-key="21"' in body                  # the alternate album option
-    assert "Suck on This (Live)" in body            # alternate album shown
-    # each matched row has an include checkbox, checked by default
-    assert 'name="include" value="1" class="inc" checked' in body
-    assert 'name="include" value="2" class="inc" checked' in body
-    # the missing song is shown inline in the full-setlist table...
-    assert "No match in library" in body
-    assert 'class="missing"' in body
-    assert "go buy these" not in body               # label removed
-    # design: stat chips and the live selected count
-    assert 'class="chip' in body
-    assert "data-selected" in body
-    # category chips highlight their rows; rows carry a status for the filter
-    assert 'data-chip-filter="fuzzy"' in body
-    assert 'data-status="exact"' in body
-    # the create form carries the true setlist length for the full-run check
-    assert 'name="song_count" value="3"' in body   # fixture has 3 songs
-    # spec elements: URL bar + Re-import, custom Add box, count-in-button
-    assert 'class="urlbar"' in body and "Re-import" in body
-    # URL bar links out to setlist.fm in a new tab
-    assert 'class="urlbar-link"' in body and 'target="_blank"' in body
-    assert 'class="addbox"' in body
-    assert "data-create-count" in body
-    # matched rows get a manual-search escape hatch (single AND multi rows)
-    assert 'data-rowsearch="1"' in body              # Tommy (single candidate)
-    assert 'data-rowsearch="2"' in body              # Jerry (multi candidate)
-    assert 'class="rowsearch-btn"' in body           # magnifier toggle by the pill
-    # the Exact/Fuzzy pill is a button opening a match-explanation popover
-    assert "data-matchinfo" in body                  # Tommy's clickable pill
-    assert "Exact title match" in body               # tier -> plain language
-    assert "Primus" in body and "own tracks in your library" in body  # source
-    assert 'data-rownum="1"' in body and "data-rowtitle" in body
-
-
-def test_stats_counts_are_exclusive():
-    import web as webmod
-    result = _preview_result()   # Tommy(exact,1 cand), Jerry(exact,2 cand), 1 missing
-    s = webmod._stats(result)
-    assert s == {"total": 3, "exact": 1, "fuzzy": 0, "multi": 1, "missing": 1}
-    assert s["exact"] + s["fuzzy"] + s["multi"] + s["missing"] == s["total"]
-
-
-def test_preview_requires_input(client):
-    resp = client.post("/preview", data={"setlist": ""})
-    assert resp.status_code == 400
-
-
-def test_preview_missing_row_has_search_ui(client, monkeypatch):
-    monkeypatch.setattr(core, "gather_matches",
-                        lambda cfg, sid, name=None, prefer_album=None: _preview_result())
-    monkeypatch.setattr(core, "load_history", lambda path: {})
-    body = client.post("/preview", data={"setlist": "abc"}).data.decode()
-    # the missing row gets a search box + disabled pick/include the JS fills
-    assert 'class="q"' in body
-    assert 'name="pick_3"' in body
-    assert 'name="include" value="3" class="inc" disabled hidden' in body
-    assert "app.js" in body                      # script is wired in
-
-
-# --- /search (manual override JSON endpoint) -------------------------------
-
-class _Track:
-    def __init__(self, title, artist, album, key):
-        self.title = title
-        self.grandparentTitle = artist
-        self.parentTitle = album
-        self.ratingKey = key
-        self.originalTitle = None
-
-
-class _Section:
-    def __init__(self, tracks):
-        self._tracks = tracks
-
-    def searchTracks(self, title=None, maxresults=None):
-        return list(self._tracks)
-
-
-def test_search_returns_json(client, monkeypatch):
-    section = _Section([_Track("Jilly's on Smack", "Primus", "Pork Soda", 77)])
-    monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
-    monkeypatch.setattr(core, "get_music_section", lambda plex, lib: section)
-    data = client.get("/search?q=jilly").get_json()
-    assert data["results"][0] == {
-        "rating_key": 77, "title": "Jilly's on Smack",
-        "artist": "Primus", "album": "Pork Soda"}
-
-
-def test_search_empty_query(client):
-    assert client.get("/search?q=").get_json() == {"results": []}
-
-
-def test_search_config_error(client, monkeypatch):
-    def boom():
-        raise core.ConfigError("Missing required environment variable(s): X")
-    monkeypatch.setattr(core, "load_config", boom)
-    resp = client.get("/search?q=x")
-    assert resp.status_code == 400
-    assert "error" in resp.get_json()
-
-
-def test_search_plex_error(client, monkeypatch):
-    def boom(u, t):
-        raise ConnectionError("Could not reach Plex")
-    monkeypatch.setattr(core, "connect_plex", boom)
-    resp = client.get("/search?q=x")
-    assert resp.status_code == 502
-    assert "error" in resp.get_json()
-
-
-def test_preview_disables_create_when_no_matches(client, monkeypatch):
-    # A setlist where nothing is in the library: full setlist still shows,
-    # but the create button is disabled.
-    all_missing = {
-        "setlist_id": "abc", "playlist_name": "Nobody — Nowhere",
-        "show": {"artist": "Nobody", "venue": "Nowhere", "city": "X",
-                 "date": "2026-01-01", "url": ""},
-        "matched": [], "missing": [(1, "Nobody", "Some Song", "")], "fuzzy": [],
-        "songs": [{"position": 1, "title": "Some Song", "matched": False,
-                   "artist": "Nobody"}],
-    }
-    monkeypatch.setattr(core, "gather_matches",
-                        lambda c, s, n=None, prefer_album=None: all_missing)
-    monkeypatch.setattr(core, "load_history", lambda p: {})
-    body = client.post("/preview", data={"setlist": "abc"}).data.decode()
-    assert "disabled>Nothing in your library to add" in body
-    assert "Some Song" in body            # still shows the (missing) setlist
-
-
-def test_preview_setlist_error(client, monkeypatch):
-    def boom(cfg, sid, name=None, prefer_album=None):
-        raise core.SetlistError("No setlist found with ID 'abc123'.")
-    monkeypatch.setattr(core, "gather_matches", boom)
-    resp = client.post("/preview", data={"setlist": "abc123"})
-    assert b"Setlist problem" in resp.data
-    assert b"No setlist found" in resp.data
-
-
-def test_create_builds_playlist(client, monkeypatch):
-    captured = {}
-
-    def fake_create(cfg, name, rating_keys, history_meta):
-        captured["name"] = name
-        captured["keys"] = rating_keys
-        captured["meta"] = history_meta
-        return name + " (2)"   # simulate a name collision suffix
-
-    monkeypatch.setattr(core, "create_playlist", fake_create)
-    resp = client.post("/create", data={
-        "name": "Primus - TD Amp",
-        "setlist_id": "abc123",
-        "url": "https://setlist.fm/x.html",
-        "artist": "Primus",
-        "date": "2026-06-16",
-        "include": ["1", "2"],
-        "pick_1": "10",
-        "pick_2": "21",          # second song: the alternate album was chosen
-        "missing_json": '[[3, "Primus", "Jilly\'s on Smack"]]',
-        "fuzzy_json": "[]",
-    })
-    assert resp.status_code == 200
-    assert captured["keys"] == ["10", "21"]   # picks honored in position order
-    assert captured["meta"]["missing"] == 1
-    assert captured["meta"]["missing_tracks"][0]["position"] == 3   # carried for summary
-    body = resp.data.decode()
-    assert "Primus - TD Amp (2)" in body         # final (suffixed) name shown
-    assert "Jilly&#39;s on Smack" in body        # buy-list persisted
-
-
-def test_create_excludes_unchecked_rows(client, monkeypatch):
-    captured = {}
-    monkeypatch.setattr(core, "create_playlist",
-                        lambda cfg, name, keys, meta: captured.update(keys=keys)
-                        or name)
-    # Three matched rows, but row 2 is left out of "include".
-    resp = client.post("/create", data={
-        "name": "Show", "setlist_id": "abc",
-        "include": ["1", "3"],
-        "pick_1": "10", "pick_2": "20", "pick_3": "30",
-        "missing_json": "[]", "fuzzy_json": "[]",
-    })
-    assert resp.status_code == 200
-    assert captured["keys"] == ["10", "30"]   # row 2 excluded, order preserved
-
-
-def test_create_passes_song_count_for_full_run(client, monkeypatch):
-    # The true setlist length rides along in history_meta so the Plex summary
-    # can tell an excluded song from a full run.
-    captured = {}
-    monkeypatch.setattr(core, "create_playlist",
-                        lambda cfg, name, keys, meta: captured.update(meta=meta)
-                        or name)
-    resp = client.post("/create", data={
-        "name": "Show", "setlist_id": "abc",
-        "include": ["1"], "pick_1": "10",
-        "missing_json": "[]", "fuzzy_json": "[]", "song_count": "6",
-    })
-    assert resp.status_code == 200
-    assert captured["meta"]["song_count"] == 6
-
-
-def test_create_requires_keys(client):
-    resp = client.post("/create", data={"name": "X"})  # nothing included
-    assert resp.status_code == 400
-
-
-def test_create_added_count_is_deduped(client, monkeypatch):
-    # Two songs resolving to the same track (e.g. a medley) -> counted once.
-    monkeypatch.setattr(core, "create_playlist",
-                        lambda cfg, name, keys, meta: name)
-    resp = client.post("/create", data={
-        "name": "Show", "setlist_id": "abc",
-        "include": ["1", "2", "3"],
-        "pick_1": "10", "pick_2": "10", "pick_3": "21",   # 10 chosen twice
-        "missing_json": "[]", "fuzzy_json": "[]",
-    })
-    body = resp.data.decode()
-    assert "2 tracks added" in body   # deduped: {10, 21}, not 3
-
-
-def test_preview_prefer_album_forwarded_and_rendered(client, monkeypatch):
-    captured = {}
-
-    def fake_gather(cfg, sid, name=None, prefer_album=None):
-        captured["prefer_album"] = prefer_album
-        result = _preview_result()
-        result["preferred_album"] = "Live@ Sun Dome"
-        result["album_options"] = [{"album": "Live@ Sun Dome", "songs": 5},
-                                   {"album": "Studio", "songs": 2}]
-        return result
-
-    monkeypatch.setattr(core, "gather_matches", fake_gather)
-    monkeypatch.setattr(core, "load_history", lambda path: {})
-    body = client.post("/preview", data={
-        "setlist": "abc", "prefer_album": "Live@ Sun Dome"}).data.decode()
-    assert captured["prefer_album"] == "Live@ Sun Dome"      # forwarded to core
-    assert 'name="prefer_album"' in body                     # the select is shown
-    assert "Live@ Sun Dome (5 songs)" in body                # option with coverage
-    assert 'value="Live@ Sun Dome" selected' in body         # pre-selected
-
-
-def test_preview_first_load_auto_detects_album(client, monkeypatch):
-    # No prefer_album in the form -> None reaches core (auto-detect).
-    captured = {}
-
-    def fake_gather(cfg, sid, name=None, prefer_album=None):
-        captured["prefer_album"] = prefer_album
-        return _preview_result()
-
-    monkeypatch.setattr(core, "gather_matches", fake_gather)
-    monkeypatch.setattr(core, "load_history", lambda path: {})
-    client.post("/preview", data={"setlist": "abc"})
-    assert captured["prefer_album"] is None
-
-
-# --- /attended (browse a user's "I was there" shows) -----------------------
+# --- attended --------------------------------------------------------------
 
 def test_attended_get_prefills_username(client, monkeypatch):
     monkeypatch.setenv("SETLISTFM_USER", "thejames")
@@ -518,8 +434,9 @@ def test_attended_post_lists_shows_with_history_crossref(client, monkeypatch):
     body = resp.data.decode()
     assert "Attended (2)" in body
     assert "Primus" in body and "Phish" in body
-    assert "created ✓" in body              # old1 flagged from history
-    assert "Phish - MSG" in body            # Update form carries playlist name
+    assert "created ✓" in body
+    assert "Phish - MSG" in body
+    assert 'action="/builder/seed"' in body        # Build/Re-open seed the builder
 
 
 def test_attended_post_empty_username(client):

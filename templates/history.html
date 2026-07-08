@@ -19,11 +19,14 @@
         <span class="miss">· {{ e.get("missing") }} missing</span>{% endif %}</td>
     <td>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <form method="post" action="{{ url_for('preview') }}" style="margin:0"
+        {% if e.get("source", "setlist") == "setlist" %}
+        <form method="post" action="{{ url_for('builder_seed') }}" style="margin:0"
               data-loading="Matching…">
           <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
+          <input type="hidden" name="service" value="{{ e.get('service', 'plex') }}">
           <button type="submit">Re-open</button>
         </form>
+        {% if e.get("service", "plex") == "plex" %}
         <form method="post" action="{{ url_for('update_preview') }}" style="margin:0"
               data-loading="Checking…">
           <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
@@ -31,8 +34,12 @@
           <input type="hidden" name="name" value="{{ e.get('playlist_name', '') }}">
           <button type="submit">Update</button>
         </form>
+        {% endif %}
         {% if e.get("url") %}
         <a href="{{ e.url }}" target="_blank" rel="noopener">setlist.fm ↗</a>
+        {% endif %}
+        {% else %}
+        <span class="sub">built in {{ 'YouTube Music' if e.get('service') == 'ytm' else 'Plex' }}</span>
         {% endif %}
       </div>
     </td>
