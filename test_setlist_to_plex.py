@@ -407,6 +407,48 @@ def test_save_then_load_round_trip(tmp_path):
     assert m.load_history(path) == data
 
 
+# ---------------------------------------------------------------------------
+# builder drafts (Phase 0 store plumbing)
+# ---------------------------------------------------------------------------
+
+def test_draft_path_honors_override(monkeypatch):
+    monkeypatch.setenv("SETLIST_TO_PLEX_DRAFTS", "/tmp/custom-drafts.json")
+    assert m.draft_path() == m.Path("/tmp/custom-drafts.json")
+
+
+def test_draft_path_defaults_beside_history(monkeypatch):
+    monkeypatch.delenv("SETLIST_TO_PLEX_DRAFTS", raising=False)
+    monkeypatch.delenv("SETLIST_TO_PLEX_HISTORY", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/xdg")
+    assert m.draft_path() == m.Path("/tmp/xdg/setlist_to_plex/drafts.json")
+
+
+def test_drafts_missing_file_returns_empty(tmp_path):
+    assert m.load_drafts(tmp_path / "nope.json") == {}
+
+
+def test_drafts_save_then_load_round_trip(tmp_path):
+    path = tmp_path / "nested" / "drafts.json"  # parent created on save
+    data = {"deadbeef": {"id": "deadbeef", "service": "plex", "tracks": []}}
+    m.save_drafts(data, path)
+    assert m.load_drafts(path) == data
+
+
+def test_new_draft_shape():
+    draft = m.new_draft("ytm", name="Mix", seed={"setlist_id": "abc"})
+    assert draft["service"] == "ytm"
+    assert draft["name"] == "Mix"
+    assert draft["seed"] == {"setlist_id": "abc"}
+    assert draft["tracks"] == []
+    assert draft["target_playlist_id"] is None
+    assert draft["created_at"] == draft["updated_at"]
+    assert len(draft["id"]) == 32  # uuid4 hex
+
+
+def test_new_draft_ids_are_unique():
+    assert m.new_draft("plex")["id"] != m.new_draft("plex")["id"]
+
+
 def test_should_process_new_id():
     assert m.should_process({}, "abc", force=False, is_tty=False) is True
 
@@ -1039,6 +1081,7 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     assert saved["abc123"]["playlist_name"] == "Phish - MSG"
     assert saved["abc123"]["matched"] == 2
     assert saved["abc123"]["playlist_rating_key"] == 999   # key stored for update
+    assert saved["abc123"]["service"] == "plex"             # backend tag defaults to Plex
     assert saved["abc123"]["missing_tracks"] == [
         {"artist": "Phish", "title": "Destiny Unbound"}]
 

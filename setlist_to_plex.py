@@ -50,6 +50,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from collections import namedtuple
 from datetime import datetime
 from pathlib import Path
@@ -616,8 +617,8 @@ def history_path():
     return Path(base) / "setlist_to_plex" / "history.json"
 
 
-def load_history(path):
-    """Load the history dict; tolerate a missing or corrupt file."""
+def _load_json_store(path):
+    """Load a JSON dict store; tolerate a missing or corrupt file."""
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -625,19 +626,69 @@ def load_history(path):
     except FileNotFoundError:
         return {}
     except (ValueError, OSError) as exc:
-        logger.warning("Could not read history at %s (%s); starting fresh.",
-                       path, exc)
+        logger.warning("Could not read %s (%s); starting fresh.", path, exc)
         return {}
 
 
-def save_history(path, history):
-    """Write the history dict atomically (temp file + replace)."""
+def _save_json_store(path, data):
+    """Write a JSON dict store atomically (temp file + replace)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(history, fh, indent=2, sort_keys=True)
+        json.dump(data, fh, indent=2, sort_keys=True)
     os.replace(tmp, path)
+
+
+def load_history(path):
+    """Load the history dict; tolerate a missing or corrupt file."""
+    return _load_json_store(path)
+
+
+def save_history(path, history):
+    """Write the history dict atomically (temp file + replace)."""
+    _save_json_store(path, history)
+
+
+def draft_path():
+    """Path to the JSON builder-draft store (override with SETLIST_TO_PLEX_DRAFTS).
+
+    Lives beside history.json so both share config-dir and XDG conventions.
+    """
+    override = os.environ.get("SETLIST_TO_PLEX_DRAFTS")
+    if override:
+        return Path(override)
+    return history_path().with_name("drafts.json")
+
+
+def load_drafts(path=None):
+    """Load the drafts dict (draft_id -> draft); tolerant of a missing file."""
+    return _load_json_store(path or draft_path())
+
+
+def save_drafts(drafts, path=None):
+    """Write the drafts dict atomically."""
+    _save_json_store(path or draft_path(), drafts)
+
+
+def new_draft(service, name="", seed=None):
+    """Build a fresh in-progress builder draft for the given service.
+
+    A draft is one service's playlist-in-progress: an ordered ``tracks`` list
+    plus optional ``seed`` metadata (from a setlist.fm show) so Save can record
+    history without re-matching. Not persisted here; the caller saves it.
+    """
+    now = datetime.now().isoformat(timespec="seconds")
+    return {
+        "id": uuid.uuid4().hex,
+        "service": service,
+        "name": name,
+        "created_at": now,
+        "updated_at": now,
+        "seed": seed,
+        "target_playlist_id": None,
+        "tracks": [],
+    }
 
 
 def should_process(history, setlist_id, force, is_tty, prompt_fn=input):
@@ -982,8 +1033,12 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None):
 
 
 def _record_history(playlist_name, playlist_rating_key, matched_count,
-                    history_meta):
-    """Write/merge the history entry for a created or updated playlist."""
+                    history_meta, service="plex"):
+    """Write/merge the history entry for a created or updated playlist.
+
+    ``service`` tags which backend the playlist lives in ("plex"/"ytm"); older
+    entries without the key are read as "plex" for backward compatibility.
+    """
     if not (history_meta and history_meta.get("id")):
         return
     setlist_id = history_meta["id"]
@@ -997,6 +1052,7 @@ def _record_history(playlist_name, playlist_rating_key, matched_count,
         "date": history_meta.get("date", entry.get("date", "")),
         "playlist_name": playlist_name,
         "playlist_rating_key": playlist_rating_key,
+        "service": service,
         "processed_at": datetime.now().isoformat(timespec="seconds"),
         "matched": matched_count,
         "missing": history_meta.get("missing", 0),
