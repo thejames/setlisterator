@@ -280,8 +280,9 @@ def builder_save(draft_id):
     if draft is None:
         return _error("Draft not found", "That draft is gone. Start a new one.")
     name = (request.form.get("name") or "").strip()
-    if name:
+    if name and name != draft["name"]:
         draft["name"] = name
+        _persist(draft)   # keep the rename even if materialize below fails
     if not draft["tracks"]:
         return _error("Nothing to save", "Add at least one track first.", 400)
     try:

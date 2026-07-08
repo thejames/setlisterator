@@ -252,7 +252,15 @@ def test_builder_add_appends_and_updates_count(client, drafts):
     body = resp.data.decode()
     assert "Wilson" in body
     assert 'id="track-count"' in body and ">1<" in body   # OOB count
+    assert "track</span>" in body                          # singular word swapped too
     assert drafts[d["id"]]["tracks"][0]["track_id"] == "42"
+
+
+def test_builder_add_count_word_pluralizes(client, drafts):
+    d = _seed(drafts, tracks=[{"track_id": "1"}])          # already one
+    body = client.post(f"/builder/{d['id']}/add",
+                       data={"track_id": "2"}).data.decode()
+    assert ">2<" in body and "tracks</span>" in body       # word swaps to plural
 
 
 def test_builder_remove(client, drafts):
@@ -314,9 +322,11 @@ def test_builder_save_service_error(client, drafts, monkeypatch):
     def boom(config, draft):
         raise core.PlexError("Plex went away")
     monkeypatch.setattr(bld, "materialize", boom)
-    body = client.post(f"/builder/{d['id']}/save", data={"name": "Mix"}).data.decode()
+    body = client.post(f"/builder/{d['id']}/save",
+                       data={"name": "Renamed Mix"}).data.decode()
     assert "Plex went away" in body
     assert d["id"] in drafts                        # kept so the user can retry
+    assert drafts[d["id"]]["name"] == "Renamed Mix"  # rename survived the failure
 
 
 def test_builder_discard(client, drafts):

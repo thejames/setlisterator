@@ -1107,6 +1107,12 @@ def _playlist_summary(history_meta, added_count, track_count=None):
     meta = history_meta or {}
     if not meta:
         return ""
+    # A from-scratch builder playlist has no show behind it — skip all the
+    # setlist-flavored copy ("N of N songs", "full run of the show", missing).
+    if meta.get("source") == "builder":
+        count = track_count if track_count is not None else added_count
+        return (f"{count} track{'' if count == 1 else 's'}.\n\n"
+                "Created by Setlist-er-ator. 🤘")
     missing = meta.get("missing_tracks", []) or []
     # Prefer the true setlist length (set by callers that know it); fall back to
     # added + missing. This keeps "of N" honest when songs were excluded in the

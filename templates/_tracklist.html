@@ -1,6 +1,7 @@
 {# Ordered draft tracklist. Included on full load; returned by add/remove/reorder.
    As a fragment (oob=True) it also swaps the action-bar count out-of-band. #}
-{% if oob %}<b id="track-count" hx-swap-oob="true">{{ draft.tracks|length }}</b>{% endif %}
+{% if oob %}<span class="count" id="track-count" hx-swap-oob="true"><b>{{ draft.tracks|length }}</b>
+  <span>track{{ '' if draft.tracks|length == 1 else 's' }}</span></span>{% endif %}
 <ul id="tracklist" class="tracklist"
     data-reorder-url="{{ url_for('builder_reorder', draft_id=draft.id) }}">
   {% for t in draft.tracks %}

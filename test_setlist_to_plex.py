@@ -1131,6 +1131,22 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
         {"artist": "Phish", "title": "Destiny Unbound"}]
 
 
+def test_playlist_summary_builder_source_is_plain():
+    # A from-scratch (source="builder") playlist has no show — no "full run",
+    # no "of N songs", no missing section.
+    summary = m._playlist_summary(
+        {"source": "builder", "song_count": 3, "missing_tracks": []},
+        added_count=3, track_count=3)
+    assert summary.splitlines() == [
+        "3 tracks.",
+        "",
+        "Created by Setlist-er-ator. 🤘",
+    ]
+    assert "full run" not in summary
+    one = m._playlist_summary({"source": "builder"}, added_count=1, track_count=1)
+    assert one.startswith("1 track.")   # singular
+
+
 def test_playlist_summary_full_record():
     summary = m._playlist_summary(
         {"url": "https://www.setlist.fm/x",
