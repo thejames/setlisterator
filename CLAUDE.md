@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Turns a [setlist.fm](https://www.setlist.fm/) show into a Plex music playlist, and reports which songs are missing from your Plex library so you know what to buy. Ships as a CLI (`setlist_to_plex.py`) and a small local Flask web app (`web.py`) that share the same matching pipeline. No database, no hosted component — it talks to a Plex server (usually on `localhost`) and persists a single JSON history file outside the repo.
+Builds music playlists on **Plex or YouTube Music**, either seeded from a [setlist.fm](https://www.setlist.fm/) show or assembled from scratch by searching. For Plex it also reports which songs are missing from your library so you know what to buy. Ships as a CLI (`setlist_to_plex.py`, Plex-only) and a small local Flask web app (`web.py`, the full builder). No database, no hosted component — it talks to a Plex server (usually on `localhost`) and/or YouTube Music, and persists JSON state (history + in-progress drafts) outside the repo.
 
 ## Commands
 
@@ -20,38 +20,35 @@ Everything runs out of the local venv (`./.venv/bin/...`).
 ./.venv/bin/python web.py                         # web app → http://127.0.0.1:5001
 ```
 
-Web app defaults to port **5001** (macOS uses 5000 for AirPlay); override with `PORT`. Config comes from `.env` (copy `.env.example`): `SETLISTFM_API_KEY`, `PLEX_BASEURL`, `PLEX_TOKEN` are required; `PLEX_MUSIC_LIBRARY` defaults to `Music`.
+Web app defaults to port **5001** (macOS uses 5000 for AirPlay); override with `PORT`. Config comes from `.env` (copy `.env.example`): `SETLISTFM_API_KEY`, `PLEX_BASEURL`, `PLEX_TOKEN` are required; `PLEX_MUSIC_LIBRARY` defaults to `Music`. YouTube Music is optional — set `YTM_OAUTH_FILE` (generated out-of-band via `ytmusicapi oauth`); when absent, YTM is greyed out and everything else works Plex-only.
 
 ## Architecture
 
-**Flat two-module layout** (`pyproject.toml` → `py-modules = ["setlist_to_plex", "web"]`), no packages:
+**Flat module layout** (`pyproject.toml` → `py-modules`), no packages. Dependency direction is one-way: `web` → `builder` → `{setlist_to_plex, ytm_service}` → (`ytm_service` → `setlist_to_plex`). `setlist_to_plex` never imports the others.
 
-- **`setlist_to_plex.py`** — the entire core library *and* the CLI. All business logic lives here: setlist.fm fetching, the matching engine, Plex connection, playlist creation, and JSON history persistence.
-- **`web.py`** — a thin Flask frontend. It `import setlist_to_plex as core` and calls the same functions; it has no business logic of its own, only routes, form parsing, and rendering (`templates/*.html` Jinja + `static/app.js`, no JS build step).
+- **`setlist_to_plex.py`** — core library + CLI: setlist.fm fetching, the matching engine, Plex connection/playlist creation, and JSON history/draft persistence.
+- **`ytm_service.py`** — the YouTube Music backend (optional `ytmusicapi` import).
+- **`builder.py`** — playlist-builder business logic (seed/add/remove/reorder/search/materialize), so the web layer stays thin.
+- **`web.py`** — thin Flask frontend: routes, form parsing, rendering (`templates/*.html` Jinja + `static/*.js`, no JS build step). No business logic of its own.
 
-**The pipeline is read → match → create, split so the web UI can insert a human review step:**
+**The MusicService seam.** `gather_matches(config, setlist_id, ..., service=PLEX_SERVICE)` takes a service adapter whose `connect(config)` returns a `(client, section)` pair. The matcher only ever duck-types that `section` (`searchArtists`/`searchTracks`) and the tracks it returns (`.title`/`.grandparentTitle`/`.parentTitle`/`.ratingKey`) — so `PlexService` (in `setlist_to_plex.py`) hands it live plexapi objects, and `YTMService` (in `ytm_service.py`) hands it thin shim objects (`YTMSection`/`_YTMTrack`) presenting the same surface. The entire two-tier matcher runs against either backend unchanged. Track identity stays a bare id (Plex `ratingKey` int, YTM `videoId` str) namespaced only at the draft/history envelope via a `service` tag — one draft targets one service, so per-track prefixes aren't needed.
 
-1. `gather_matches(config, setlist_id, ...)` — orchestrator. Fetches the setlist, resolves the artist, matches every song, returns a dict (`matched`/`missing`/`fuzzy`/`songs` + `candidates` per song). **Read-only — creates nothing.** Both the CLI and the web `/preview` call this.
-2. `create_playlist(config, name, rating_keys, ...)` — the only thing that mutates Plex. Takes already-chosen Plex `rating_key`s, calls `plex.createPlaylist`, records history. Nothing is re-matched here.
-3. `add_to_playlist(...)` — the "Update" path; add-only top-up of an existing playlist (`playlist.addItems`).
+**Two mutation paths, deliberately forked** (not abstracted — low shared value): `create_playlist(config, name, rating_keys, ...)` (Plex, `plex.createPlaylist`) and `create_playlist_ytm(config, name, video_ids, ...)` (`ytmusicapi.create_playlist`). `builder.materialize` dispatches on `draft["service"]`. `add_to_playlist` (add-only Plex "Update") stays Plex-only; editing existing playlists is not yet implemented (a reserved `target_playlist_id` draft field marks the seam).
 
-The load-bearing hand-off between stages is the Plex **`rating_key`** (an integer). It's the universal track identifier threaded through the match IR, the history JSON, and both frontends' form fields (`web._picked_rating_keys`). The web flow is: `/preview` renders candidates → user picks versions → `/create` rebuilds tracks *by rating key* with no re-matching.
+**The matcher is the most valuable code** (middle third of `setlist_to_plex.py`). Two-tier: **artist-scoped** (resolve the artist once, pull all their tracks, compare locally — sidesteps the backend's search tokenizer) then **global search** fallback. Titles compare via `normalize_simple`/`normalize_aggressive` across four ranked tiers (`exact`/`loose`/`medley`/`prefix`) in `_title_rank`/`_ranked_matches`; anything past `exact` is a **fuzzy match**. Results are `Match = namedtuple("track quality tier source")`. Note YTM's artist-scoped tier is inherently shallower (ytmusicapi has no full "all tracks by artist" endpoint, only a top-songs shelf), so it falls to global search more often.
 
-**The matcher is the most substantial and valuable code** (roughly the middle third of `setlist_to_plex.py`). Two-tier strategy:
-1. **Artist-scoped (primary)** — resolve the setlist artist once, pull *all* their Plex tracks, compare locally. Deliberately sidesteps Plex's search tokenizer, which misses tracks over punctuation/Unicode quirks and result truncation.
-2. **Global search (fallback)** — only when the artist isn't in the library or a song isn't theirs (covers).
+**The web builder flow.** Landing page picks a destination + optional setlist seed → `/builder/seed` creates a **draft** (server-side JSON) and redirects to `/builder/<id>`. There, htmx fragments drive search/add/remove/reorder (SortableJS for drag); each mutation re-saves the draft so a refresh resumes. `/builder/<id>/save` calls `materialize` then deletes the draft. Fragments render `_tracklist.html`/`_search_results.html`; the action-bar track count updates via an htmx out-of-band swap.
 
-Titles compare via `normalize_simple` / `normalize_aggressive` across four ranked tiers — `exact`, `loose` (fuzzy), `medley` (slash-split segments), `prefix` — in `_title_rank` / `_ranked_matches`. Anything past `exact` is surfaced as a **fuzzy match** for spot-checking. Results are `Match = namedtuple("track quality tier source")`; `source` is `"scoped"` or `"global"`.
+**Config** is a plain dict from `load_config()` (Plex/setlist.fm) plus `ytm_oauth_path` merged in by the web layer (`_web_config`). Plex auth is a static token; YTM auth is a file-based OAuth blob loaded by `ytmusicapi`.
 
-**Plex is hardcoded throughout — there is no music-service abstraction.** `plexapi` is imported directly into the core module, the matcher operates on live plexapi `track`/`section` objects (reading `grandparentTitle`, `originalTitle`, etc.), and the Plex `rating_key` is baked into the IR, history, and forms. Adding another service (e.g. YouTube Music) would require introducing a `MusicService` interface and a service-neutral track id — see the exploration discussed prior; it's a real refactor, not a drop-in.
-
-**Config** is a plain dict from `load_config()` threaded through every function (`config["plex_baseurl"]`, etc.). Plex auth is a static token (`PlexServer(baseurl, token)`) — no OAuth. setlist.fm is a header API key.
-
-**History** is a single JSON file keyed by setlist ID (default `~/.config/setlist_to_plex/history.json`, honoring `XDG_CONFIG_HOME`; override with `SETLIST_TO_PLEX_HISTORY`). It lives outside the repo. Only runs that actually create a playlist are recorded, so a show that matched nothing is retried next time. It also caches per-track album data (from setlist.fm's "Songs on Albums", MusicBrainz fallback) used by the web **Buy list**.
+**Persistence** (both under `~/.config/setlist_to_plex/`, honoring `XDG_CONFIG_HOME`, sharing the atomic `_load_json_store`/`_save_json_store` helpers):
+- **`history.json`** — keyed by setlist ID; only created playlists are recorded. Each entry carries a `service` (`plex`/`ytm`, defaulting to `plex` for old entries) and `source` (`setlist`/`builder`). From-scratch playlists record a light `builder-<uuid>`-keyed entry. Also caches per-track album data (setlist.fm "Songs on Albums", MusicBrainz fallback) for the Plex-only **Buy list**.
+- **`drafts.json`** (override `SETLIST_TO_PLEX_DRAFTS`) — in-progress builder drafts keyed by uuid; deleted on Save.
 
 ## Conventions
 
 - **stdout vs stderr (CLI):** the actionable report (playlist name, missing, fuzzy) goes to **stdout**; per-song match decisions log to **stderr** (silence with `--quiet`). CLI exit codes: `0` ok, `2` config error, `3` setlist error, `4` Plex error.
-- **Tests are network-free by design.** `test_setlist_to_plex.py` covers pure logic (parsing, normalization, flattening, name generation). `test_web.py` monkeypatches `core.load_config` / `gather_matches` / `create_playlist` so it exercises routing and rendering only. Keep new tests offline the same way. There's no lint step.
+- **Tests are network-free by design.** `test_setlist_to_plex.py` covers pure logic and the service seam (a `FakeMusicService` double); `test_ytm_service.py` uses a `FakeYTMusic` client (runs even without `ytmusicapi` installed, since the import is soft); `test_builder.py` / `test_web.py` monkeypatch `gather_matches` / `builder.*` / the draft store. Keep new tests offline the same way. There's no lint step.
+- **Adapters call module-level functions by name, not `self`.** `PlexService.connect` invokes `connect_plex`/`get_music_section` unqualified so existing monkeypatched tests still take effect — preserve this when extending.
 - The web app is **local-only and unauthenticated** — it holds your Plex token and binds to `127.0.0.1`. Don't add anything that assumes it's safely network-exposed.
 - Version is CalVer (`YYYY.M.PATCH` in `pyproject.toml`); commits follow conventional-commit style.
