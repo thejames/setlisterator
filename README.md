@@ -219,17 +219,32 @@ instead. It reads public attended data, so any public username works.
 
 ### YouTube Music (optional)
 
-To enable the YouTube Music destination, generate an OAuth file with
-`ytmusicapi`'s own helper and point `YTM_OAUTH_FILE` at it:
+YouTube Music has no official API, so `ytmusicapi` uses Google's device-OAuth
+flow — which needs your own Google OAuth credentials (a one-time setup):
 
-```bash
-./.venv/bin/python -m ytmusicapi oauth   # follow the prompts; writes oauth.json
-# then in .env:  YTM_OAUTH_FILE=/absolute/path/to/oauth.json
-```
+1. In the [Google Cloud Console](https://console.cloud.google.com/): create a
+   project, enable the **YouTube Data API v3**, then under **Credentials**
+   create an **OAuth client ID** of type **TVs and Limited Input devices**
+   (configure the consent screen and add your Google account as a test user if
+   prompted). Copy the client ID and secret.
+2. Run the flow, saving the token where the app looks for it by default:
 
-If unset (or the file is missing), YouTube Music is simply greyed out on the
-landing page and everything else works Plex-only. `ytmusicapi` is unofficial, so
-this can break if Google changes things; the CLI stays Plex-only.
+   ```bash
+   mkdir -p ~/.config/setlist_to_plex
+   ./.venv/bin/ytmusicapi oauth \
+     --client-id 'YOUR_CLIENT_ID' --client-secret 'YOUR_CLIENT_SECRET' \
+     --file ~/.config/setlist_to_plex/ytm_oauth.json
+   ```
+
+   Open the printed URL, sign in with the Google account that has your YouTube
+   Music, and approve.
+3. Restart the web app. YouTube Music is now selectable. (Used the default path
+   above? No `.env` change needed. To store it elsewhere, set
+   `YTM_OAUTH_FILE=/absolute/path/to/oauth.json`.)
+
+If the file is missing, YouTube Music is simply greyed out and everything else
+works Plex-only. `ytmusicapi` is unofficial, so this can break if Google changes
+things; the CLI stays Plex-only.
 
 ## Deploy (self-host with Docker)
 
