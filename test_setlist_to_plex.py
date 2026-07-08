@@ -906,6 +906,51 @@ def test_gather_matches_builds_structure(monkeypatch):
     assert result["songs"][2]["title"] == "Some Rarity"
 
 
+# ---------------------------------------------------------------------------
+# service seam (Phase 1): gather_matches targets a pluggable MusicService
+# ---------------------------------------------------------------------------
+
+class _FakeService:
+    """Minimal MusicService: connect() hands back a (client, section) pair."""
+
+    def __init__(self, section, name="fake"):
+        self.name = name
+        self._section = section
+        self.connected_with = None
+
+    def connect(self, config):
+        self.connected_with = config
+        return object(), self._section
+
+
+def test_gather_matches_tags_service_default_plex(monkeypatch):
+    _wire_gather(monkeypatch, [_FakeTrack("Wilson", "Phish", rating_key=10)])
+    result = m.gather_matches(_CONFIG, "abc123")
+    assert result["service"] == "plex"
+
+
+def test_gather_matches_uses_injected_service(monkeypatch):
+    monkeypatch.setattr(m, "fetch_setlist", lambda sid, key: _gather_setlist_data())
+    monkeypatch.setattr(m, "fetch_album_map", lambda url: {})
+    section = _FakeSection(artists=[
+        _FakeArtist("Phish", [_FakeTrack("Wilson", "Phish", rating_key=10)])])
+    svc = _FakeService(section)
+    result = m.gather_matches(_CONFIG, "abc123", service=svc)
+    assert result["service"] == "fake"
+    assert svc.connected_with is _CONFIG            # the service did the connecting
+    assert result["matched"][0]["rating_key"] == 10  # matcher ran against its section
+
+
+def test_plex_service_connect_uses_module_functions(monkeypatch):
+    sentinel_client, sentinel_section = object(), object()
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: sentinel_client)
+    monkeypatch.setattr(m, "get_music_section", lambda plex, lib: sentinel_section)
+    client, section = m.PLEX_SERVICE.connect(_CONFIG)
+    assert client is sentinel_client
+    assert section is sentinel_section
+    assert m.PLEX_SERVICE.name == "plex"
+
+
 def test_gather_matches_attaches_multiple_candidates(monkeypatch):
     # Same song on two albums -> one matched row with two candidates.
     library = [

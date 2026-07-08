@@ -368,6 +368,25 @@ def get_music_section(plex, section_name):
     return section
 
 
+class PlexService:
+    """Adapter letting gather_matches target a music backend.
+
+    ``connect`` returns the ``(client, section)`` pair the matcher searches
+    against. It calls the module-level ``connect_plex``/``get_music_section`` by
+    name (not via ``self``) so tests that monkeypatch those still take effect.
+    """
+
+    name = "plex"
+
+    def connect(self, config):
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+        section = get_music_section(plex, config["music_library"])
+        return plex, section
+
+
+PLEX_SERVICE = PlexService()
+
+
 def _track_artist_name(track):
     """Best-effort album-artist name for a Plex track."""
     # grandparentTitle is the album artist; originalTitle often holds the
@@ -899,14 +918,18 @@ def print_report(playlist_name, added_count, missing, fuzzy):
 # Core pipeline (shared by the CLI and the web app)
 # ---------------------------------------------------------------------------
 
-def gather_matches(config, setlist_id, name=None, prefer_album=None):
-    """Fetch a setlist and match every song against the Plex library.
+def gather_matches(config, setlist_id, name=None, prefer_album=None,
+                   service=None):
+    """Fetch a setlist and match every song against a music service's catalog.
 
     Read-only: no playlist is created. Returns a dict with the show metadata,
     the resolved playlist name, and matched/missing/fuzzy lists (matched
-    entries are deduped and carry the Plex track rating key so a playlist can
-    be built later without re-matching). Raises SetlistError or PlexError (with
+    entries are deduped and carry the track rating key so a playlist can be
+    built later without re-matching). Raises SetlistError or PlexError (with
     a human-readable message) on failure.
+
+    ``service`` selects the backend to match against (a PlexService by default);
+    it supplies the ``(client, section)`` the two-tier matcher searches.
 
     ``prefer_album`` biases which version of a song is chosen when it exists on
     several albums: ``None`` auto-detects a cohesive album (e.g. a live recording
@@ -930,9 +953,9 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None):
     if show["url"]:
         logger.info("Source:  %s", show["url"])
 
+    service = service or PLEX_SERVICE
     try:
-        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
-        section = get_music_section(plex, config["music_library"])
+        _client, section = service.connect(config)
     except (PermissionError, ConnectionError, LookupError) as exc:
         raise PlexError(str(exc)) from exc
 
@@ -1029,6 +1052,7 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None):
         "fuzzy": fuzzy,
         "preferred_album": preferred_album,
         "album_options": album_options,
+        "service": service.name,
     }
 
 
