@@ -33,4 +33,4 @@ setlisterator-web = "web:main"
 # files. Install editable (`pip install -e .`) so Flask finds templates/static
 # in place.
 [tool.setuptools]
-py-modules = ["setlist_to_plex", "web", "ytm_service"]
+py-modules = ["setlist_to_plex", "web", "ytm_service", "builder"]
