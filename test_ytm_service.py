@@ -5,6 +5,8 @@ even when ytmusicapi isn't installed (the soft import leaves ytm_service.YTMusic
 as None, which each test overrides via monkeypatch).
 """
 
+import json
+
 import pytest
 
 import setlist_to_plex as core
@@ -36,17 +38,40 @@ class FakeYTMusic:
         return "PL123"
 
 
+def _browser_auth(tmp_path):
+    """A browser-style auth file (headers; no refresh_token)."""
+    p = tmp_path / "ytm_auth.json"
+    p.write_text(json.dumps({"cookie": "c", "authorization": "a"}),
+                 encoding="utf-8")
+    return p
+
+
+def _oauth_auth(tmp_path):
+    """An OAuth-style token file (carries a refresh_token)."""
+    p = tmp_path / "ytm_auth.json"
+    p.write_text(json.dumps({"access_token": "a", "refresh_token": "r",
+                             "token_type": "Bearer", "expires_in": 0}),
+                 encoding="utf-8")
+    return p
+
+
 @pytest.fixture
 def ytm(monkeypatch):
     monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
+    monkeypatch.setattr(y, "OAuthCredentials", lambda **k: object())
     return FakeYTMusic()
 
 
-_CONFIG = {"api_key": "k", "ytm_oauth_path": "/tmp/oauth.json"}
+def _config(auth_path, with_creds=True):
+    cfg = {"api_key": "k", "ytm_oauth_path": str(auth_path)}
+    if with_creds:
+        cfg["ytm_client_id"] = "cid"
+        cfg["ytm_client_secret"] = "csec"
+    return cfg
 
 
 # ---------------------------------------------------------------------------
-# config / availability
+# path / detection
 # ---------------------------------------------------------------------------
 
 def test_oauth_path_honors_override(monkeypatch):
@@ -62,6 +87,30 @@ def test_oauth_path_defaults_beside_history(monkeypatch):
         "/tmp/xdg/setlist_to_plex/ytm_oauth.json")
 
 
+def test_is_oauth_file_distinguishes(tmp_path):
+    assert y._is_oauth_file(_oauth_auth(tmp_path)) is True
+    assert y._is_oauth_file(_browser_auth(tmp_path)) is False
+    assert y._is_oauth_file(tmp_path / "missing.json") is False
+
+
+def test_clean_browser_headers_drops_chrome_junk():
+    raw = {
+        "cookie": "c", "authorization": "a", "user-agent": "ua",
+        "x-goog-authuser": "0",
+        # junk a Chrome paste introduces:
+        "/youtubei/v1/browse?prettyprint=false": "", "decoded": "",
+        "music.youtube.com": "", "content-encoding": "gzip",
+        "accept-encoding": "gzip, deflate", "x-browser-year": "2024",
+    }
+    cleaned = y._clean_browser_headers(raw)
+    assert set(cleaned) == {"cookie", "authorization", "user-agent",
+                            "x-goog-authuser"}
+
+
+# ---------------------------------------------------------------------------
+# availability
+# ---------------------------------------------------------------------------
+
 def test_unavailable_when_library_missing(monkeypatch):
     monkeypatch.setattr(y, "YTMusic", None)
     cfg = y.load_ytm_config()
@@ -69,28 +118,76 @@ def test_unavailable_when_library_missing(monkeypatch):
     assert "not installed" in cfg["reason"]
 
 
-def test_unavailable_when_oauth_file_missing(monkeypatch, tmp_path):
+def test_unavailable_when_no_auth_file(monkeypatch, tmp_path):
     monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
     monkeypatch.setenv("YTM_OAUTH_FILE", str(tmp_path / "absent.json"))
     cfg = y.load_ytm_config()
     assert cfg["available"] is False
-    assert "OAuth file" in cfg["reason"]
+    assert "auth file" in cfg["reason"]
 
 
-def test_available_when_library_and_file_present(monkeypatch, tmp_path):
+def test_browser_file_available_without_creds(monkeypatch, tmp_path):
     monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
-    oauth = tmp_path / "oauth.json"
-    oauth.write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("YTM_OAUTH_FILE", str(oauth))
+    monkeypatch.delenv("YTM_CLIENT_ID", raising=False)
+    monkeypatch.delenv("YTM_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("YTM_OAUTH_FILE", str(_browser_auth(tmp_path)))
     cfg = y.load_ytm_config()
-    assert cfg["available"] is True
+    assert cfg["available"] is True                # browser auth needs no creds
     assert cfg["reason"] == ""
 
 
-def test_connect_ytmusic_errors_without_library(monkeypatch):
+def test_oauth_file_needs_creds(monkeypatch, tmp_path):
+    monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
+    monkeypatch.delenv("YTM_CLIENT_ID", raising=False)
+    monkeypatch.delenv("YTM_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("YTM_OAUTH_FILE", str(_oauth_auth(tmp_path)))
+    cfg = y.load_ytm_config()
+    assert cfg["available"] is False
+    assert "YTM_CLIENT_ID" in cfg["reason"]
+
+
+def test_oauth_file_available_with_creds(monkeypatch, tmp_path):
+    monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
+    monkeypatch.setenv("YTM_CLIENT_ID", "cid")
+    monkeypatch.setenv("YTM_CLIENT_SECRET", "csec")
+    monkeypatch.setenv("YTM_OAUTH_FILE", str(_oauth_auth(tmp_path)))
+    cfg = y.load_ytm_config()
+    assert cfg["available"] is True
+
+
+# ---------------------------------------------------------------------------
+# connect (auto-detects browser vs oauth)
+# ---------------------------------------------------------------------------
+
+def test_connect_errors_without_library(monkeypatch, tmp_path):
     monkeypatch.setattr(y, "YTMusic", None)
     with pytest.raises(y.YTMError):
-        y.connect_ytmusic(_CONFIG)
+        y.connect_ytmusic(_config(_browser_auth(tmp_path)))
+
+
+def test_connect_errors_without_auth_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
+    with pytest.raises(y.YTMError):
+        y.connect_ytmusic(_config(tmp_path / "missing.json"))
+
+
+def test_connect_browser_needs_no_creds(monkeypatch, tmp_path):
+    monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
+    client = y.connect_ytmusic(_config(_browser_auth(tmp_path), with_creds=False))
+    assert isinstance(client, FakeYTMusic)          # plain YTMusic(file), no creds
+
+
+def test_connect_oauth_needs_creds(monkeypatch, tmp_path):
+    monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
+    with pytest.raises(y.YTMError):
+        y.connect_ytmusic(_config(_oauth_auth(tmp_path), with_creds=False))
+
+
+def test_connect_oauth_with_creds(monkeypatch, tmp_path):
+    monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
+    monkeypatch.setattr(y, "OAuthCredentials", lambda **k: object())
+    client = y.connect_ytmusic(_config(_oauth_auth(tmp_path)))
+    assert isinstance(client, FakeYTMusic)
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +221,7 @@ def test_section_search_artists_returns_artists_with_tracks(ytm):
 # the whole matcher runs against YouTube Music via the seam
 # ---------------------------------------------------------------------------
 
-def test_gather_matches_against_ytm(monkeypatch):
+def test_gather_matches_against_ytm(monkeypatch, tmp_path):
     monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
     monkeypatch.setattr(core, "fetch_setlist", lambda sid, key: {})
     monkeypatch.setattr(core, "extract_show", lambda data: {
@@ -132,7 +229,8 @@ def test_gather_matches_against_ytm(monkeypatch):
         "date": "2023-12-31", "url": "", "songs": ["Wilson"]})
     monkeypatch.setattr(core, "fetch_album_map", lambda url: {})
 
-    result = core.gather_matches(_CONFIG, "abc123", service=y.YTM_SERVICE)
+    result = core.gather_matches(_config(_browser_auth(tmp_path)), "abc123",
+                                 service=y.YTM_SERVICE)
     assert result["service"] == "ytm"
     assert result["matched"][0]["rating_key"] == "v1"       # videoId flows through
     assert result["matched"][0]["track_title"] == "Wilson"
@@ -149,7 +247,7 @@ def test_create_playlist_dedupes_and_records_history(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "history_path", lambda: hist)
 
     name = y.create_playlist_ytm(
-        _CONFIG, "My Mix", ["v1", "v2", "v1", None],
+        _config(_browser_auth(tmp_path)), "My Mix", ["v1", "v2", "v1", None],
         history_meta={"id": "abc123", "url": "u", "artist": "Phish",
                       "date": "2023-12-31"})
 
@@ -160,7 +258,7 @@ def test_create_playlist_dedupes_and_records_history(monkeypatch, tmp_path):
     assert saved["abc123"]["playlist_rating_key"] == "PL123"
 
 
-def test_create_playlist_errors_on_empty(monkeypatch):
+def test_create_playlist_errors_on_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
     with pytest.raises(y.YTMError):
-        y.create_playlist_ytm(_CONFIG, "Empty", [None, ""])
+        y.create_playlist_ytm(_config(_browser_auth(tmp_path)), "Empty", [None, ""])

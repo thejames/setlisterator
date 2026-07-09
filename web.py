@@ -34,8 +34,13 @@ def _error(title, message, status=200):
 
 
 def _web_config():
-    """Core config plus the YouTube Music OAuth path (raises ConfigError)."""
-    return {**core.load_config(), "ytm_oauth_path": ytm.ytm_oauth_path()}
+    """Core config plus the YouTube Music OAuth path + client creds (raises
+    ConfigError from load_config)."""
+    client_id, client_secret = ytm.ytm_client_creds()
+    return {**core.load_config(),
+            "ytm_oauth_path": ytm.ytm_oauth_path(),
+            "ytm_client_id": client_id,
+            "ytm_client_secret": client_secret}
 
 
 def _load_draft(draft_id):

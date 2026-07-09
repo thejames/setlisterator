@@ -13,16 +13,31 @@ Plex-only install is unaffected and YouTube Music simply reports itself
 unavailable.
 """
 
+import json
 import os
+import re
 from collections import namedtuple
 from pathlib import Path
 
 import setlist_to_plex as core
 
+# Header keys to drop from a browser-auth file. Copying request headers from
+# Chrome pulls in HTTP/2 pseudo-headers, the request line, and a "decoded"
+# annotation (which ytmusicapi mis-parses into bogus keys), plus request-only
+# encoding headers that make YouTube return an empty body. Firefox is cleaner,
+# but we sanitize either way so a Chrome paste still works.
+_DROP_HEADERS = {"content-encoding", "accept-encoding", "content-length",
+                 "priority", "x-client-data", "decoded",
+                 "x-browser-channel", "x-browser-copyright",
+                 "x-browser-validation", "x-browser-year"}
+_HEADER_NAME = re.compile(r"[a-z0-9-]+")
+
 try:
     from ytmusicapi import YTMusic
+    from ytmusicapi.auth.oauth import OAuthCredentials
 except ImportError:                       # optional dependency
     YTMusic = None
+    OAuthCredentials = None
 
 
 class YTMError(Exception):
@@ -40,11 +55,53 @@ def ytm_oauth_path():
     return core.history_path().with_name("ytm_oauth.json")
 
 
+def ytm_client_creds():
+    """(client_id, client_secret) for the Google OAuth client, from the env.
+
+    Only needed for OAuth-style auth files, where ytmusicapi uses them at
+    runtime (not just at `ytmusicapi oauth` time) to refresh the token — the
+    OAuth file itself holds only tokens. Browser-style auth files don't use them.
+    """
+    return (os.environ.get("YTM_CLIENT_ID", ""),
+            os.environ.get("YTM_CLIENT_SECRET", ""))
+
+
+def _clean_browser_headers(headers):
+    """Drop junk keys a browser paste can introduce, keeping real headers.
+
+    Removes anything that isn't a valid header name (paths, hosts, ``:pseudo``
+    headers) and the request-only/encoding headers in ``_DROP_HEADERS`` that
+    otherwise yield an empty response.
+    """
+    out = {}
+    for key, value in headers.items():
+        name = key.strip().lower()
+        if not _HEADER_NAME.fullmatch(name) or name in _DROP_HEADERS:
+            continue
+        out[key] = value
+    return out
+
+
+def _is_oauth_file(path):
+    """True if the auth file is an OAuth token file (vs browser headers).
+
+    OAuth token files carry a ``refresh_token``; browser-auth files are a bag of
+    request headers (``cookie``/``authorization``/…). Malformed/missing → False.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return "refresh_token" in json.load(fh)
+    except (OSError, ValueError):
+        return False
+
+
 def load_ytm_config():
     """Describe YouTube Music availability without raising.
 
     Returns ``{available, oauth_path, reason}``. The web app offers YTM as a
     destination only when ``available`` is True, and shows ``reason`` otherwise.
+    Accepts either a browser-auth file or an OAuth token file (the latter also
+    needs the client id/secret).
     """
     path = ytm_oauth_path()
     if YTMusic is None:
@@ -52,17 +109,44 @@ def load_ytm_config():
                 "reason": "ytmusicapi is not installed (pip install ytmusicapi)."}
     if not path.exists():
         return {"available": False, "oauth_path": path,
-                "reason": f"No YouTube Music OAuth file at {path}. Run "
-                          "`ytmusicapi oauth` and save the result there."}
+                "reason": f"No YouTube Music auth file at {path}. Set one up with "
+                          "`ytmusicapi browser` (recommended) or `ytmusicapi oauth`."}
+    if _is_oauth_file(path) and not all(ytm_client_creds()):
+        return {"available": False, "oauth_path": path,
+                "reason": "OAuth auth file needs YTM_CLIENT_ID and "
+                          "YTM_CLIENT_SECRET set to refresh its token."}
     return {"available": True, "oauth_path": path, "reason": ""}
 
 
 def connect_ytmusic(config):
-    """Authenticate a YTMusic client from ``config['ytm_oauth_path']``."""
+    """Authenticate a YTMusic client from the configured auth file.
+
+    Auto-detects browser-auth (headers) vs OAuth (token) files; OAuth additionally
+    needs the client id/secret to build refresh credentials.
+    """
     if YTMusic is None:
         raise YTMError("ytmusicapi is not installed (pip install ytmusicapi).")
+    auth_file = config.get("ytm_oauth_path")
+    if not (auth_file and os.path.exists(str(auth_file))):
+        raise YTMError("No YouTube Music auth file — set one up with "
+                       "`ytmusicapi browser` or `ytmusicapi oauth`.")
     try:
-        return YTMusic(str(config["ytm_oauth_path"]))
+        if _is_oauth_file(auth_file):
+            client_id = config.get("ytm_client_id")
+            client_secret = config.get("ytm_client_secret")
+            if not (client_id and client_secret):
+                raise YTMError("OAuth auth file needs YTM_CLIENT_ID and "
+                               "YTM_CLIENT_SECRET to refresh its token.")
+            creds = OAuthCredentials(client_id=client_id,
+                                     client_secret=client_secret)
+            return YTMusic(str(auth_file), oauth_credentials=creds)
+        # Browser auth: pass sanitized headers as a dict so a Chrome paste
+        # (with junk keys) works without hand-editing the file.
+        with open(auth_file, encoding="utf-8") as fh:
+            headers = json.load(fh)
+        return YTMusic(_clean_browser_headers(headers))
+    except YTMError:
+        raise
     except Exception as exc:
         raise YTMError(
             f"Could not authenticate to YouTube Music: {exc}") from exc
