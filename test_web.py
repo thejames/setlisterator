@@ -164,6 +164,47 @@ def test_history_empty(client, monkeypatch):
     assert "No history yet" in body
 
 
+# --- connect YouTube Music -------------------------------------------------
+
+def test_index_shows_connect_link_when_ytm_unavailable(client, monkeypatch):
+    monkeypatch.setattr(ytm, "browser_connect_available", lambda: True)
+    body = client.get("/").data.decode()
+    assert 'href="/ytm/connect"' in body          # YTM off (fixture) → offer connect
+
+
+def test_ytm_connect_lists_sources_with_accounts(client, monkeypatch):
+    monkeypatch.setattr(ytm, "browser_connect_available", lambda: True)
+    monkeypatch.setattr(ytm, "list_ytm_sources",
+                        lambda: [{"id": "safari", "label": "Safari"},
+                                 {"id": "chrome:Profile 3", "label": "Chrome — Profile 3"}])
+    monkeypatch.setattr(ytm, "ytm_source_account",
+                        lambda sid: "James Zambon" if sid == "safari" else None)
+    body = client.get("/ytm/connect").data.decode()
+    assert "James Zambon" in body                 # resolved account name
+    assert "Safari" in body and "Chrome — Profile 3" in body
+    assert 'value="safari"' in body               # source id to submit
+
+
+def test_ytm_connect_unavailable_without_deps(client, monkeypatch):
+    monkeypatch.setattr(ytm, "browser_connect_available", lambda: False)
+    body = client.get("/ytm/connect").data.decode()
+    assert "browser_cookie3" in body
+
+
+def test_ytm_connect_save_writes_and_redirects(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(ytm, "connect_ytm_source",
+                        lambda sid: seen.setdefault("id", sid))
+    resp = client.post("/ytm/connect", data={"source": "safari"})
+    assert resp.status_code == 302
+    assert seen["id"] == "safari"
+
+
+def test_ytm_connect_save_requires_source(client):
+    resp = client.post("/ytm/connect", data={})
+    assert resp.status_code == 400
+
+
 # --- builder: seeding ------------------------------------------------------
 
 def test_seed_empty_creates_draft_and_redirects(client, drafts):

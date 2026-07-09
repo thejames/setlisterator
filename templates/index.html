@@ -31,6 +31,12 @@
           </span>
         </label>
       </div>
+      {% if not ytm.available and ytm_can_connect %}
+      <p class="hint" style="margin:2px 0 0">
+        <a href="{{ url_for('ytm_connect') }}">Connect YouTube Music →</a>
+        from a browser you're signed in to.
+      </p>
+      {% endif %}
 
       <label>Seed from a setlist.fm show <span style="font-weight:400;color:var(--faint)">(optional)</span>
         <input name="setlist" autofocus

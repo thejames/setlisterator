@@ -70,7 +70,8 @@ def index():
         core.load_config()
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
-    return render_template("index.html", ytm=ytm.load_ytm_config())
+    return render_template("index.html", ytm=ytm.load_ytm_config(),
+                           ytm_can_connect=ytm.browser_connect_available())
 
 
 @app.get("/history")
@@ -161,6 +162,36 @@ def attended_load():
         show["prior"] = seen.get(show.get("id"))
     return render_template("attended.html", username=username, shows=shows,
                            ytm=ytm.load_ytm_config())
+
+
+# ---------------------------------------------------------------------------
+# Connect YouTube Music (one-click, from a logged-in browser)
+# ---------------------------------------------------------------------------
+
+@app.get("/ytm/connect")
+def ytm_connect():
+    """Show browser sources with a YouTube session, labeled by account."""
+    if not ytm.browser_connect_available():
+        return _error("Can't auto-connect",
+                      "Install browser_cookie3 (pip install browser_cookie3) to "
+                      "connect YouTube Music from your browser.")
+    sources = ytm.list_ytm_sources()
+    for s in sources:                       # annotate with the account name
+        s["account"] = ytm.ytm_source_account(s["id"])
+    return render_template("ytm_connect.html", sources=sources)
+
+
+@app.post("/ytm/connect")
+def ytm_connect_save():
+    """Write the auth file from the chosen browser source."""
+    source_id = (request.form.get("source") or "").strip()
+    if not source_id:
+        return _error("No source chosen", "Pick a browser to connect from.", 400)
+    try:
+        ytm.connect_ytm_source(source_id)
+    except ytm.YTMError as exc:
+        return _error("Couldn't connect YouTube Music", str(exc))
+    return redirect(url_for("index"))
 
 
 # ---------------------------------------------------------------------------

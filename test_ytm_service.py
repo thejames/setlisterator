@@ -262,3 +262,74 @@ def test_create_playlist_errors_on_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(y, "YTMusic", FakeYTMusic)
     with pytest.raises(y.YTMError):
         y.create_playlist_ytm(_config(_browser_auth(tmp_path)), "Empty", [None, ""])
+
+
+# ---------------------------------------------------------------------------
+# one-click connect from a browser's cookies
+# ---------------------------------------------------------------------------
+
+class _FakeCookie:
+    def __init__(self, name, value):
+        self.name, self.value = name, value
+
+
+def _jar(*pairs):
+    return [_FakeCookie(n, v) for n, v in pairs]
+
+
+def test_browser_connect_available(monkeypatch):
+    monkeypatch.setattr(y, "_bc3", object())
+    monkeypatch.setattr(y, "_ytmusicapi", object())
+    assert y.browser_connect_available() is True
+    monkeypatch.setattr(y, "_bc3", None)
+    assert y.browser_connect_available() is False
+
+
+def test_auth_raw_requires_sapisid():
+    with pytest.raises(y.YTMError):
+        y._auth_raw_from_cookies({"SID": "x"})          # no __Secure-3PAPISID
+
+
+def test_auth_raw_builds_header_block():
+    raw = y._auth_raw_from_cookies({"__Secure-3PAPISID": "abc", "SID": "s"})
+    assert "cookie: __Secure-3PAPISID=abc; SID=s" in raw
+    assert "authorization: SAPISIDHASH" in raw          # type-detection header
+    assert "x-goog-authuser: 0" in raw
+
+
+def test_list_ytm_sources_keeps_only_logged_in(monkeypatch):
+    defs = [
+        ("safari", "Safari", lambda: _jar(("__Secure-3PAPISID", "a"), ("SID", "s"))),
+        ("chrome:Default", "Chrome — Default", lambda: _jar(("SID", "x"))),  # no session
+        ("firefox", "Firefox", lambda: (_ for _ in ()).throw(RuntimeError("no ff"))),
+    ]
+    monkeypatch.setattr(y, "_cookie_source_defs", lambda: defs)
+    assert [s["id"] for s in y.list_ytm_sources()] == ["safari"]
+
+
+def test_connect_ytm_source_writes_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(y, "_bc3", object())
+    monkeypatch.setattr(y, "_source_cookies",
+                        lambda sid: {"__Secure-3PAPISID": "a"})
+    path = tmp_path / "ytm_oauth.json"
+    monkeypatch.setattr(y, "ytm_oauth_path", lambda: path)
+
+    calls = {}
+
+    class FakeYtmModule:
+        def setup(self, filepath=None, headers_raw=None):
+            calls["filepath"], calls["raw"] = filepath, headers_raw
+            open(filepath, "w").write("{}")
+            return "{}"
+    monkeypatch.setattr(y, "_ytmusicapi", FakeYtmModule())
+
+    result = y.connect_ytm_source("safari")
+    assert result == path
+    assert calls["filepath"] == str(path)
+    assert "SAPISIDHASH" in calls["raw"]
+
+
+def test_connect_ytm_source_needs_deps(monkeypatch):
+    monkeypatch.setattr(y, "_bc3", None)
+    with pytest.raises(y.YTMError):
+        y.connect_ytm_source("safari")

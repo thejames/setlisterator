@@ -20,7 +20,7 @@ Everything runs out of the local venv (`./.venv/bin/...`).
 ./.venv/bin/python web.py                         # web app → http://127.0.0.1:5001
 ```
 
-Web app defaults to port **5001** (macOS uses 5000 for AirPlay); override with `PORT`. Config comes from `.env` (copy `.env.example`): `SETLISTFM_API_KEY`, `PLEX_BASEURL`, `PLEX_TOKEN` are required; `PLEX_MUSIC_LIBRARY` defaults to `Music`. YouTube Music is optional and needs three env vars — `YTM_CLIENT_ID` + `YTM_CLIENT_SECRET` (your Google OAuth client, required at runtime to refresh the token) and the `YTM_OAUTH_FILE` token generated via `ytmusicapi oauth`; when any is absent, YTM is greyed out and everything else works Plex-only.
+Web app defaults to port **5001** (macOS uses 5000 for AirPlay); override with `PORT`. Config comes from `.env` (copy `.env.example`): `SETLISTFM_API_KEY`, `PLEX_BASEURL`, `PLEX_TOKEN` are required; `PLEX_MUSIC_LIBRARY` defaults to `Music`. YouTube Music is optional. Easiest setup is the web app's **Connect YouTube Music** flow (`/ytm/connect`), which reads a logged-in browser's cookies via `browser_cookie3` and writes the auth file — no env vars. Manual alternatives: `ytmusicapi browser` (header paste) or `ytmusicapi oauth` (needs `YTM_CLIENT_ID`/`YTM_CLIENT_SECRET`, and YouTube often rejects self-made OAuth clients with HTTP 400). Auth file defaults to `~/.config/setlist_to_plex/ytm_oauth.json` (`YTM_OAUTH_FILE`); `connect_ytmusic` auto-detects browser-vs-oauth. When unset, YTM is greyed out and everything works Plex-only.
 
 ## Architecture
 

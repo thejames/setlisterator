@@ -33,11 +33,22 @@ _DROP_HEADERS = {"content-encoding", "accept-encoding", "content-length",
 _HEADER_NAME = re.compile(r"[a-z0-9-]+")
 
 try:
+    import ytmusicapi as _ytmusicapi
     from ytmusicapi import YTMusic
     from ytmusicapi.auth.oauth import OAuthCredentials
+    from ytmusicapi.helpers import get_authorization
 except ImportError:                       # optional dependency
+    _ytmusicapi = None
     YTMusic = None
     OAuthCredentials = None
+    get_authorization = None
+
+try:
+    import browser_cookie3 as _bc3       # optional: one-click connect from a browser
+except ImportError:
+    _bc3 = None
+
+_YTM_ORIGIN = "https://music.youtube.com"
 
 
 class YTMError(Exception):
@@ -150,6 +161,107 @@ def connect_ytmusic(config):
     except Exception as exc:
         raise YTMError(
             f"Could not authenticate to YouTube Music: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# One-click connect: build an auth file from a logged-in browser's cookies,
+# so nobody has to copy request headers by hand.
+# ---------------------------------------------------------------------------
+
+def browser_connect_available():
+    """True if we can offer cookie-based connect (deps present)."""
+    return _bc3 is not None and _ytmusicapi is not None
+
+
+def _cookie_source_defs():
+    """(id, label, loader) for each installed browser cookie store (macOS).
+
+    Loaders are lazy and may raise if the browser/profile isn't present; the
+    caller guards. Chrome is enumerated per profile (accounts differ by profile).
+    """
+    if _bc3 is None:
+        return []
+    defs = [("safari", "Safari", lambda: _bc3.safari(domain_name="youtube.com")),
+            ("firefox", "Firefox", lambda: _bc3.firefox(domain_name="youtube.com"))]
+    chrome_base = Path.home() / "Library/Application Support/Google/Chrome"
+    for db in sorted(chrome_base.glob("*/Cookies")):
+        profile = db.parent.name
+        defs.append((f"chrome:{profile}", f"Chrome — {profile}",
+                     lambda db=db: _bc3.chrome(cookie_file=str(db),
+                                               domain_name="youtube.com")))
+    for bid, label in (("edge", "Edge"), ("brave", "Brave"), ("arc", "Arc")):
+        loader = getattr(_bc3, bid, None)
+        if loader:
+            defs.append((bid, label,
+                         lambda loader=loader: loader(domain_name="youtube.com")))
+    return defs
+
+
+def _source_cookies(source_id):
+    """Cookie name→value dict for a source id, or raise YTMError."""
+    for sid, _label, loader in _cookie_source_defs():
+        if sid == source_id:
+            try:
+                return {c.name: c.value for c in loader()}
+            except Exception as exc:
+                raise YTMError(f"Could not read cookies from {source_id}: "
+                               f"{exc}") from exc
+    raise YTMError(f"Unknown browser source '{source_id}'.")
+
+
+def _auth_raw_from_cookies(cookies):
+    """Build a clean ytmusicapi header block from a cookie dict.
+
+    The __Secure-3PAPISID cookie is the durable credential — ytmusicapi
+    recomputes the SAPISIDHASH from it per request, so the file lasts as long as
+    the browser session does.
+    """
+    sapisid = cookies.get("__Secure-3PAPISID")
+    if not sapisid:
+        raise YTMError("No YouTube session there — sign in at music.youtube.com.")
+    cookie_str = "; ".join(f"{n}={v}" for n, v in cookies.items())
+    authorization = get_authorization(sapisid + " " + _YTM_ORIGIN)
+    return "\n".join([f"cookie: {cookie_str}",
+                      f"authorization: {authorization}",
+                      "x-goog-authuser: 0",
+                      f"origin: {_YTM_ORIGIN}"])
+
+
+def list_ytm_sources():
+    """Browser sources that hold a YouTube session. Cheap — no network."""
+    sources = []
+    for sid, label, loader in _cookie_source_defs():
+        try:
+            cookies = {c.name: c.value for c in loader()}
+        except Exception:
+            continue
+        if cookies.get("__Secure-3PAPISID"):
+            sources.append({"id": sid, "label": label})
+    return sources
+
+
+def ytm_source_account(source_id):
+    """The Google account name behind a source, or None if it can't be read.
+
+    Costs one YouTube Music API call — used to label the connect picker.
+    """
+    try:
+        raw = _auth_raw_from_cookies(_source_cookies(source_id))
+        headers = json.loads(_ytmusicapi.setup(headers_raw=raw))
+        return YTMusic(headers).get_account_info().get("accountName")
+    except Exception:
+        return None
+
+
+def connect_ytm_source(source_id):
+    """Write the auth file from a browser source's cookies. Returns its path."""
+    if not browser_connect_available():
+        raise YTMError("Browser connect needs the browser_cookie3 package.")
+    raw = _auth_raw_from_cookies(_source_cookies(source_id))
+    path = ytm_oauth_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ytmusicapi.setup(filepath=str(path), headers_raw=raw)
+    return path
 
 
 # Duck-types a plexapi track for the matcher: the only attributes it reads are

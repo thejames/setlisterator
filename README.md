@@ -219,12 +219,22 @@ instead. It reads public attended data, so any public username works.
 
 ### YouTube Music (optional)
 
-YouTube Music has no official API. The app accepts either of `ytmusicapi`'s auth
-methods and auto-detects which you used; the token/headers file defaults to
-`ytm_oauth.json` beside `history.json` (override with `YTM_OAUTH_FILE`).
+YouTube Music has no official API, so auth means borrowing a logged-in browser
+session. The auth file defaults to `ytm_oauth.json` beside `history.json`
+(override with `YTM_OAUTH_FILE`).
 
-**Browser auth (recommended — reliable).** Copies request headers from a
-logged-in YouTube Music session:
+**One-click connect (recommended).** In the web app, when YouTube Music isn't
+set up yet, the landing page shows **Connect YouTube Music →**. It scans the
+browsers you're signed into, lists them **by Google account** (so you pick the
+right one across multiple profiles), and on pick reads that session's cookies
+directly — no header copying. macOS asks to use your keychain once (click
+Allow); Safari needs no prompt. Re-connect the same way whenever the session
+expires. (Needs the `browser_cookie3` package, included in `requirements.txt`.)
+
+The two manual methods below still work and auto-detect:
+
+**Browser auth (manual).** Copies request headers from a logged-in YouTube Music
+session:
 
 ```bash
 mkdir -p ~/.config/setlist_to_plex
