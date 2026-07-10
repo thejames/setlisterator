@@ -154,6 +154,8 @@ def test_history_builder_entry_has_no_setlist_actions(client, monkeypatch):
     })
     body = client.get("/history").data.decode()
     assert "Road Trip" in body
+    assert "Built from scratch" in body           # Show column labeled, not blank ()
+    assert "()" not in body                        # no empty artist/date placeholder
     assert "built in YouTube Music" in body
     assert 'action="/builder/seed"' not in body   # no Re-open for a from-scratch entry
 

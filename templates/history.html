@@ -13,8 +13,15 @@
   {% for e in entries %}
   <tr>
     <td class="sub">{{ e.get("processed_at", "—") }}</td>
-    <td>{{ e.get("artist", "Unknown") }} <span class="sub">({{ e.get("date", "?") }})</span></td>
-    <td>{{ e.get("playlist_name", "—") }}</td>
+    <td>
+      {% if e.get("source") == "builder" %}
+      <span class="sub">Built from scratch</span>
+      {% else %}
+      {{ e.get("artist") or "Unknown" }}
+      <span class="sub">({{ e.get("date") or "?" }})</span>
+      {% endif %}
+    </td>
+    <td>{{ e.get("playlist_name") or "—" }}</td>
     <td>{{ e.get("matched", 0) }} added{% if e.get("missing") %}
         <span class="miss">· {{ e.get("missing") }} missing</span>{% endif %}</td>
     <td>
