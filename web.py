@@ -17,7 +17,6 @@ network. It wraps the core pipeline plus the playlist builder:
     builder.materialize()       -> commit the draft to Plex or YouTube Music
 """
 
-import json
 import os
 
 from flask import Flask, redirect, render_template, request, url_for
@@ -311,28 +310,82 @@ def builder_reorder(draft_id):
 
 @app.post("/builder/<draft_id>/save")
 def builder_save(draft_id):
-    """Materialize the draft into a playlist on its service, then delete it."""
+    """Save the draft: create a new playlist, or apply edits to the target one."""
     draft = _load_draft(draft_id)
     if draft is None:
         return _error("Draft not found", "That draft is gone. Start a new one.")
     name = (request.form.get("name") or "").strip()
     if name and name != draft["name"]:
         draft["name"] = name
-        _persist(draft)   # keep the rename even if materialize below fails
+        _persist(draft)   # keep the rename even if the save below fails
     if not draft["tracks"]:
         return _error("Nothing to save", "Add at least one track first.", 400)
+
+    editing = bool(draft.get("target_playlist_id"))
     try:
-        final_name = bld.materialize(_web_config(), draft)
+        if editing:
+            final_name, stats = bld.apply_edits(_web_config(), draft)
+        else:
+            final_name = bld.materialize(_web_config(), draft)
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
     except (core.PlexError, ytm.YTMError) as exc:
         return _error("Music service problem", str(exc))
 
     _delete_draft(draft_id)
+    label = _SERVICE_LABEL[draft["service"]]
+    if editing:
+        return render_template("created.html", name=final_name, edited=True,
+                               added=len(draft["tracks"]), stats=stats,
+                               missing=[], service_label=label)
     missing = (draft.get("seed") or {}).get("missing_tracks", [])
     return render_template("created.html", name=final_name,
                            added=len(draft["tracks"]), missing=missing,
-                           service_label=_SERVICE_LABEL[draft["service"]])
+                           service_label=label)
+
+
+@app.post("/builder/edit")
+def builder_edit():
+    """Open an existing playlist into the builder for editing."""
+    service = "ytm" if request.form.get("service") == "ytm" else "plex"
+    playlist_id = (request.form.get("playlist_id") or "").strip()
+    if not playlist_id:
+        return _error("No playlist", "Nothing to edit.", 400)
+    try:
+        draft = bld.draft_from_playlist(_web_config(), service, playlist_id)
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    except (core.PlexError, ytm.YTMError) as exc:
+        return _error("Couldn't open that playlist", str(exc))
+    _persist(draft)
+    return redirect(url_for("builder_open", draft_id=draft["id"]))
+
+
+@app.get("/playlist/delete")
+def playlist_delete_confirm():
+    """Confirmation page before deleting a playlist."""
+    service = "ytm" if request.args.get("service") == "ytm" else "plex"
+    playlist_id = (request.args.get("id") or "").strip()
+    if not playlist_id:
+        return _error("No playlist", "Nothing to delete.", 400)
+    return render_template("confirm_delete.html", service=service,
+                           playlist_id=playlist_id,
+                           name=request.args.get("name", ""),
+                           service_label=_SERVICE_LABEL[service])
+
+
+@app.post("/playlist/delete")
+def playlist_delete():
+    """Delete a playlist from its service (and drop its history entry)."""
+    service = "ytm" if request.form.get("service") == "ytm" else "plex"
+    playlist_id = (request.form.get("id") or "").strip()
+    try:
+        bld.delete_playlist(_web_config(), service, playlist_id)
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    except (core.PlexError, ytm.YTMError) as exc:
+        return _error("Couldn't delete playlist", str(exc))
+    return redirect(url_for("history"))
 
 
 @app.post("/builder/<draft_id>/discard")
@@ -343,123 +396,6 @@ def builder_discard(draft_id):
 
 
 _SERVICE_LABEL = {"plex": "Plex", "ytm": "YouTube Music"}
-
-
-# ---------------------------------------------------------------------------
-# Update an existing (Plex) playlist — add-only top-up, unchanged flow
-# ---------------------------------------------------------------------------
-
-@app.post("/update-preview")
-def update_preview():
-    """Re-match a past show and show which now-available tracks are NOT yet in
-    its existing playlist (the add-only diff), for confirmation."""
-    setlist_arg = (request.form.get("setlist") or "").strip()
-    playlist_key = (request.form.get("playlist_rating_key") or "").strip()
-    pl_name = (request.form.get("name") or "").strip()
-    if not setlist_arg:
-        return _error("Missing input", "No setlist to update from.", 400)
-
-    try:
-        config = core.load_config()
-        setlist_id = core.parse_setlist_id(setlist_arg)
-        result = core.gather_matches(config, setlist_id, None)
-        plex = core.connect_plex(config["plex_baseurl"], config["plex_token"])
-    except core.ConfigError as exc:
-        return _error("Configuration needed", str(exc))
-    except ValueError as exc:
-        return _error("Couldn't read that setlist", str(exc), 400)
-    except core.SetlistError as exc:
-        return _error("Setlist problem", str(exc))
-    except (PermissionError, ConnectionError, core.PlexError) as exc:
-        return _error("Plex problem", str(exc))
-
-    playlist = core.find_playlist(plex, rating_key=playlist_key or None,
-                                  name=pl_name or None)
-    if playlist is None:
-        return _error("Playlist not found",
-                      "That playlist no longer exists in Plex. Use Re-open to "
-                      "create a fresh one.")
-
-    existing = set()
-    try:
-        for item in playlist.items():
-            key = getattr(item, "ratingKey", None)
-            if key is not None:
-                existing.add(str(key))
-    except Exception:
-        pass
-
-    # New = matched songs with no candidate already in the playlist (any version).
-    new_songs = []
-    for song in result["matched"]:
-        cand_keys = {str(c.get("rating_key")) for c in song.get("candidates", [])}
-        if cand_keys & existing:
-            continue
-        new_songs.append(song)
-
-    return render_template(
-        "update.html", result=result, playlist=playlist, new_songs=new_songs,
-        playlist_rating_key=getattr(playlist, "ratingKey", "") or "",
-        missing_json=json.dumps(result["missing"]))
-
-
-@app.post("/update")
-def update():
-    """Add the chosen new tracks to the existing playlist (add-only)."""
-    name = (request.form.get("name") or "").strip()
-    playlist_key = (request.form.get("playlist_rating_key") or "").strip()
-    setlist_id = (request.form.get("setlist_id") or "").strip()
-    rating_keys = _picked_rating_keys()
-    if not rating_keys:
-        return _error("Nothing selected", "No tracks chosen to add.", 400)
-
-    try:
-        config = core.load_config()
-        title, added = core.add_to_playlist(
-            config, playlist_key or None, name, rating_keys,
-            _history_meta_from_form(setlist_id))
-    except core.ConfigError as exc:
-        return _error("Configuration needed", str(exc))
-    except core.PlexError as exc:
-        return _error("Plex problem", str(exc))
-
-    return render_template("updated.html", name=title, added=added)
-
-
-def _picked_rating_keys():
-    """Collect included rows' pick_<position> values, in setlist order."""
-    included = {int(p) for p in request.form.getlist("include") if p.isdigit()}
-    keys = []
-    for pos in sorted(included):
-        key = request.form.get(f"pick_{pos}")
-        if key:
-            keys.append(key)
-    return keys
-
-
-def _history_meta_from_form(setlist_id):
-    """Build history_meta (incl. missing_tracks) from the hidden form fields."""
-    try:
-        missing = json.loads(request.form.get("missing_json") or "[]")
-    except ValueError:
-        missing = []
-    try:
-        song_count = int(request.form.get("song_count") or 0)
-    except ValueError:
-        song_count = 0
-    return {
-        "id": setlist_id,
-        "url": request.form.get("url", ""),
-        "artist": request.form.get("artist", ""),
-        "date": request.form.get("date", ""),
-        "song_count": song_count,
-        "missing": len(missing),
-        # missing rows are [position, artist, title, album?]; carry position+album.
-        "missing_tracks": [
-            {"position": row[0], "artist": row[1], "title": row[2],
-             "album": (row[3] if len(row) > 3 else "")}
-            for row in missing if len(row) >= 3],
-    }
 
 
 def _port():

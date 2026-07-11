@@ -133,7 +133,7 @@ def test_history_lists_entries_newest_first(client, monkeypatch):
                 "url": "https://setlist.fm/phish.html"},
         "new": {"id": "new", "artist": "Primus", "date": "2026-06-16",
                 "playlist_name": "Primus — TD Amp", "processed_at": "2026-06-23",
-                "matched": 8, "missing": 4,
+                "matched": 8, "missing": 4, "playlist_rating_key": 500,
                 "url": "https://setlist.fm/primus.html"},
     })
     body = client.get("/history").data.decode()
@@ -143,7 +143,7 @@ def test_history_lists_entries_newest_first(client, monkeypatch):
     assert 'action="/builder/seed"' in body
     assert 'name="setlist" value="https://setlist.fm/primus.html"' in body
     assert "4 missing" in body
-    assert 'action="/update-preview"' in body   # Update present for Plex/setlist
+    assert 'action="/builder/edit"' in body      # Edit present for Plex row with an id
 
 
 def test_history_builder_entry_has_no_setlist_actions(client, monkeypatch):
@@ -379,87 +379,83 @@ def test_builder_discard(client, drafts):
     assert d["id"] not in drafts
 
 
-# --- update flow (unchanged, Plex add-only) --------------------------------
+# --- editing an existing playlist (Edit / Delete) --------------------------
 
-class _FakePL:
-    def __init__(self, title, key, item_keys):
-        self.title = title
-        self.ratingKey = key
-        self._items = [type("T", (), {"ratingKey": k})() for k in item_keys]
-
-    def items(self):
-        return list(self._items)
-
-
-def _update_result():
-    tommy = {"position": 1, "title": "Tommy the Cat",
-             "track_title": "Tommy the Cat", "track_artist": "Primus",
-             "album": "Seas", "rating_key": 10, "tier": "exact",
-             "source": "scoped", "quality": "exact",
-             "candidates": [{"rating_key": 10, "track_title": "Tommy the Cat",
-                             "track_artist": "Primus", "album": "Seas",
-                             "tier": "exact", "source": "scoped",
-                             "quality": "exact"}]}
-    jerry = {"position": 2, "title": "Jerry", "track_title": "Jerry",
-             "track_artist": "Primus", "album": "Seas", "rating_key": 20,
-             "tier": "exact", "source": "scoped", "quality": "exact",
-             "candidates": [{"rating_key": 20, "track_title": "Jerry",
-                             "track_artist": "Primus", "album": "Seas",
-                             "tier": "exact", "source": "scoped",
-                             "quality": "exact"}]}
-    return {"setlist_id": "abc123",
-            "show": {"artist": "Primus", "url": "https://setlist.fm/x.html"},
-            "matched": [tommy, jerry], "missing": []}
+def test_history_editable_plex_row_has_edit_and_delete(client, monkeypatch):
+    monkeypatch.setattr(core, "load_history", lambda path: {
+        "abc": {"id": "abc", "service": "plex", "source": "setlist",
+                "playlist_name": "Primus — TD Amp", "playlist_rating_key": 500,
+                "artist": "Primus", "date": "2026-06-16", "matched": 10,
+                "processed_at": "2026-07-01"}})
+    body = client.get("/history").data.decode()
+    assert 'action="/builder/edit"' in body
+    assert 'name="playlist_id" value="500"' in body
+    assert "/playlist/delete?" in body
 
 
-def test_update_preview_shows_only_new(client, monkeypatch):
-    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _update_result())
-    monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
-    pl = _FakePL("Primus — TD Amp", 500, item_keys=[10])   # already has Tommy(10)
-    monkeypatch.setattr(core, "find_playlist", lambda plex, **k: pl)
-    body = client.post("/update-preview",
-                       data={"setlist": "abc123"}).data.decode()
-    assert "Jerry" in body and "Tommy the Cat" not in body
+def test_history_ytm_row_not_editable(client, monkeypatch):
+    monkeypatch.setattr(core, "load_history", lambda path: {
+        "z": {"id": "z", "service": "ytm", "source": "setlist",
+              "playlist_name": "Zakk", "playlist_rating_key": "PL1",
+              "processed_at": "2026-07-01"}})
+    body = client.get("/history").data.decode()
+    assert 'action="/builder/edit"' not in body      # YTM edit deferred
+    assert "/playlist/delete?" not in body
 
 
-def test_update_preview_nothing_new(client, monkeypatch):
-    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _update_result())
-    monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
-    pl = _FakePL("Primus — TD Amp", 500, item_keys=[10, 20])
-    monkeypatch.setattr(core, "find_playlist", lambda plex, **k: pl)
-    body = client.post("/update-preview",
-                       data={"setlist": "abc123"}).data.decode()
-    assert "Nothing new" in body
+def test_builder_edit_opens_draft(client, drafts, monkeypatch):
+    monkeypatch.setattr(bld, "draft_from_playlist", lambda cfg, svc, pid:
+                        core.new_draft(svc, name="My Mix") | {
+                            "target_playlist_id": pid})
+    resp = client.post("/builder/edit",
+                       data={"service": "plex", "playlist_id": "500"})
+    assert resp.status_code == 302
+    draft = next(iter(drafts.values()))
+    assert draft["target_playlist_id"] == "500"
 
 
-def test_update_preview_playlist_gone(client, monkeypatch):
-    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _update_result())
-    monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
-    monkeypatch.setattr(core, "find_playlist", lambda plex, **k: None)
-    body = client.post("/update-preview",
-                       data={"setlist": "abc123"}).data.decode()
+def test_builder_edit_playlist_gone(client, drafts, monkeypatch):
+    def boom(cfg, svc, pid):
+        raise core.PlexError("no longer exists")
+    monkeypatch.setattr(bld, "draft_from_playlist", boom)
+    body = client.post("/builder/edit",
+                       data={"service": "plex", "playlist_id": "500"}).data.decode()
     assert "no longer exists" in body
 
 
-def test_update_adds_picked_tracks(client, monkeypatch):
-    captured = {}
+def test_builder_save_edit_applies_and_deletes(client, drafts, monkeypatch):
+    d = _seed(drafts, tracks=[{"track_id": "10", "item_id": "i1"}])
+    d["target_playlist_id"] = "500"
+    seen = {}
 
-    def fake_add(config, key, name, rating_keys, meta):
-        captured["keys"] = rating_keys
-        return ("Primus — TD Amp", len(rating_keys))
-    monkeypatch.setattr(core, "add_to_playlist", fake_add)
-    resp = client.post("/update", data={
-        "name": "Primus — TD Amp", "playlist_rating_key": "500",
-        "setlist_id": "abc123", "include": ["2"], "pick_2": "20"})
-    assert resp.status_code == 200
-    assert captured["keys"] == ["20"]
-    assert "added" in resp.data.decode().lower()
+    def fake_apply(config, draft):
+        seen["id"] = draft["target_playlist_id"]
+        return (draft["name"], {"added": 1, "removed": 2})
+    monkeypatch.setattr(bld, "apply_edits", fake_apply)
+
+    body = client.post(f"/builder/{d['id']}/save", data={"name": "Mix"}).data.decode()
+    assert "Playlist updated in Plex" in body
+    assert "removed" in body                         # stats shown
+    assert seen["id"] == "500"
+    assert d["id"] not in drafts
 
 
-def test_update_requires_picks(client):
-    resp = client.post("/update", data={"name": "X", "playlist_rating_key": "1"})
-    assert resp.status_code == 400
-    assert "No tracks chosen" in resp.data.decode()
+def test_delete_confirm_page(client):
+    body = client.get("/playlist/delete",
+                      query_string={"service": "plex", "id": "500",
+                                    "name": "My Mix"}).data.decode()
+    assert "Delete this playlist?" in body
+    assert "My Mix" in body
+    assert 'value="500"' in body
+
+
+def test_delete_executes_and_redirects(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(bld, "delete_playlist",
+                        lambda cfg, svc, pid: seen.update(svc=svc, pid=pid))
+    resp = client.post("/playlist/delete", data={"service": "plex", "id": "500"})
+    assert resp.status_code == 302
+    assert seen == {"svc": "plex", "pid": "500"}
 
 
 # --- attended --------------------------------------------------------------
@@ -488,8 +484,9 @@ def test_attended_post_lists_shows_with_history_crossref(client, monkeypatch):
     assert "Attended (2)" in body
     assert "Primus" in body and "Phish" in body
     assert "created ✓" in body
-    assert "Phish - MSG" in body
     assert 'action="/builder/seed"' in body        # Build/Re-open seed the builder
+    assert 'action="/builder/edit"' in body        # prior Plex playlist is editable
+    assert 'name="playlist_id" value="999"' in body
 
 
 def test_attended_post_empty_username(client):

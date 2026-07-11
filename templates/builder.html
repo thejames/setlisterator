@@ -42,7 +42,11 @@
 
 {% block content %}
 <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:6px">
+  {% if draft.target_playlist_id %}
+  <span class="dest-badge">✎ Editing in <b>{{ service_label }}</b></span>
+  {% else %}
   <span class="dest-badge">◆ Destination <b>{{ service_label }}</b></span>
+  {% endif %}
   {% if draft.seed %}
   <span class="meta" style="margin:0">
     <span class="lead">{{ draft.seed.artist }}</span>
@@ -106,7 +110,8 @@
     <form id="save-form" method="post"
           action="{{ url_for('builder_save', draft_id=draft.id) }}"
           data-loading="Saving to {{ service_label }}…">
-      <button type="submit" class="btn-accent">Save to {{ service_label }}</button>
+      <button type="submit" class="btn-accent">
+        {{ "Save changes" if draft.target_playlist_id else "Save to " + service_label }}</button>
     </form>
   </div>
 </div>

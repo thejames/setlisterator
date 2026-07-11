@@ -41,14 +41,14 @@
           <input type="hidden" name="setlist" value="{{ s.url or s.id }}">
           <button type="submit">Re-open</button>
         </form>
-        <form method="post" action="{{ url_for('update_preview') }}" style="margin:0"
-              data-loading="Checking…">
-          <input type="hidden" name="setlist" value="{{ s.url or s.id }}">
-          <input type="hidden" name="playlist_rating_key"
-                 value="{{ s.prior.get('playlist_rating_key', '') }}">
-          <input type="hidden" name="name" value="{{ s.prior.get('playlist_name', '') }}">
-          <button type="submit">Update</button>
+        {% if s.prior.get("service", "plex") == "plex" and s.prior.get("playlist_rating_key") %}
+        <form method="post" action="{{ url_for('builder_edit') }}" style="margin:0"
+              data-loading="Opening…">
+          <input type="hidden" name="service" value="{{ s.prior.get('service', 'plex') }}">
+          <input type="hidden" name="playlist_id" value="{{ s.prior.get('playlist_rating_key') }}">
+          <button type="submit">Edit</button>
         </form>
+        {% endif %}
         {% else %}
         <form method="post" action="{{ url_for('builder_seed') }}" style="margin:0"
               data-loading="Matching…">
