@@ -1270,6 +1270,178 @@ def add_to_playlist(config, rating_key, name, rating_keys, history_meta=None):
     return playlist.title, len(tracks)
 
 
+# ---------------------------------------------------------------------------
+# Editing an existing Plex playlist (add / remove / reorder / rename / delete).
+# The builder loads a playlist's live tracks, the user edits, and save applies
+# only the differences. Track rows carry the Plex playlistItemID as ``item_id``
+# for rows already in the playlist (absent for newly-added rows).
+# ---------------------------------------------------------------------------
+
+def _playlist_rows(playlist):
+    """Ordered track rows for a Plex playlist, each with its item_id."""
+    rows = []
+    for item in playlist.items():
+        rk = getattr(item, "ratingKey", None)
+        rows.append({
+            "track_id": str(rk) if rk is not None else "",
+            "item_id": str(getattr(item, "playlistItemID", "") or ""),
+            "title": getattr(item, "title", ""),
+            "artist": _track_artist_name(item),
+            "album": _track_album(item),
+        })
+    return rows
+
+
+def open_playlist(config, playlist_id):
+    """Load an existing Plex playlist for editing: ``{name, tracks}``.
+
+    Raises PlexError if Plex is unreachable or the playlist is gone.
+    """
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    except (PermissionError, ConnectionError) as exc:
+        raise PlexError(str(exc)) from exc
+    playlist = find_playlist(plex, rating_key=playlist_id)
+    if playlist is None:
+        raise PlexError("That playlist no longer exists in Plex.")
+    return {"name": playlist.title, "tracks": _playlist_rows(playlist)}
+
+
+def _reorder_playlist(playlist, desired_rows):
+    """Reorder the playlist's items to match ``desired_rows`` order.
+
+    Called after removals/additions, so the playlist already holds the right
+    set. Kept rows are matched by item_id; added rows (no item_id) by rating key
+    in order. Each item is moved after its predecessor — n sequential moves.
+    """
+    items = playlist.items()
+    by_itemid = {str(getattr(i, "playlistItemID", "")): i for i in items}
+    kept_ids = {r["item_id"] for r in desired_rows if r.get("item_id")}
+    added_by_key = {}
+    for i in items:
+        iid = str(getattr(i, "playlistItemID", ""))
+        if iid not in kept_ids:
+            added_by_key.setdefault(str(getattr(i, "ratingKey", "")), []).append(i)
+
+    target = []
+    for r in desired_rows:
+        iid = r.get("item_id")
+        if iid and iid in by_itemid:
+            target.append(by_itemid[iid])
+        else:
+            queue = added_by_key.get(str(r["track_id"]))
+            if queue:
+                target.append(queue.pop(0))
+
+    prev = None
+    for item in target:
+        try:
+            playlist.moveItem(item, after=prev)
+        except Exception as exc:
+            logger.warning("Could not move playlist item (%s).", exc)
+        prev = item
+
+
+def apply_playlist_edits(config, playlist_id, name, desired_rows):
+    """Apply add/remove/reorder/rename to an existing Plex playlist (smart diff).
+
+    ``desired_rows`` is the ordered target; each row has ``track_id`` and an
+    optional ``item_id`` (present = keep that playlist item, absent = add the
+    track). Diffs against the playlist's *current* contents so external changes
+    aren't clobbered. Returns ``(final_title, {"added": n, "removed": n})``.
+    """
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    except (PermissionError, ConnectionError) as exc:
+        raise PlexError(str(exc)) from exc
+    playlist = find_playlist(plex, rating_key=playlist_id)
+    if playlist is None:
+        raise PlexError("That playlist no longer exists in Plex.")
+
+    current = playlist.items()
+    kept_ids = {r["item_id"] for r in desired_rows if r.get("item_id")}
+    to_remove = [i for i in current
+                 if str(getattr(i, "playlistItemID", "")) not in kept_ids]
+
+    added = []
+    for r in desired_rows:
+        if r.get("item_id"):
+            continue
+        try:
+            added.append(plex.fetchItem(int(r["track_id"])))
+        except Exception:
+            logger.warning("Could not fetch track %s; skipping.", r["track_id"])
+
+    try:
+        if to_remove:
+            playlist.removeItems(to_remove)
+        if added:
+            playlist.addItems(added)
+    except plex_exceptions.PlexApiException as exc:
+        raise PlexError(f"Failed to update playlist: {exc}") from exc
+
+    _reorder_playlist(playlist, desired_rows)
+
+    if name and name != playlist.title:
+        try:
+            playlist.editTitle(name)
+        except Exception as exc:
+            logger.warning("Could not rename playlist (%s).", exc)
+
+    final_title = getattr(playlist, "title", name)
+    _update_history_playlist(playlist_id, final_title, len(desired_rows))
+    return final_title, {"added": len(added), "removed": len(to_remove)}
+
+
+def delete_playlist(config, playlist_id):
+    """Delete a Plex playlist and drop its history entry. Returns its title."""
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    except (PermissionError, ConnectionError) as exc:
+        raise PlexError(str(exc)) from exc
+    playlist = find_playlist(plex, rating_key=playlist_id)
+    if playlist is None:
+        raise PlexError("That playlist no longer exists in Plex.")
+    title = playlist.title
+    try:
+        playlist.delete()
+    except plex_exceptions.PlexApiException as exc:
+        raise PlexError(f"Failed to delete playlist: {exc}") from exc
+    _forget_history(playlist_id)
+    return title
+
+
+def _update_history_playlist(playlist_id, title, track_count):
+    """Refresh the history entry for a playlist after an in-place edit."""
+    hist_file = history_path()
+    history = load_history(hist_file)
+    for entry in history.values():
+        if str(entry.get("playlist_rating_key")) == str(playlist_id):
+            entry["playlist_name"] = title
+            entry["matched"] = track_count
+            entry["processed_at"] = datetime.now().isoformat(timespec="seconds")
+            try:
+                save_history(hist_file, history)
+            except OSError as exc:
+                logger.warning("Could not write history (%s).", exc)
+            return
+
+
+def _forget_history(playlist_id):
+    """Drop any history entry pointing at a (now-deleted) playlist id."""
+    hist_file = history_path()
+    history = load_history(hist_file)
+    keys = [k for k, e in history.items()
+            if str(e.get("playlist_rating_key")) == str(playlist_id)]
+    for k in keys:
+        del history[k]
+    if keys:
+        try:
+            save_history(hist_file, history)
+        except OSError as exc:
+            logger.warning("Could not write history (%s).", exc)
+
+
 def backfill_history(config):
     """Fill in missing_tracks for history entries that have a missing count but
     no track list (created before track-level history). Re-matches each setlist

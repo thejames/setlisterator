@@ -1302,3 +1302,142 @@ def test_add_to_playlist_missing_playlist_raises(monkeypatch):
     monkeypatch.setattr(m, "connect_plex", lambda u, t: plex)
     with pytest.raises(m.PlexError):
         m.add_to_playlist(_CONFIG, 999, "Gone", ["10"])
+
+
+# ---------------------------------------------------------------------------
+# editing an existing Plex playlist (open / apply diff / delete)
+# ---------------------------------------------------------------------------
+
+class _FakePLItem:
+    """A track as it sits inside a playlist: rating key + membership id."""
+
+    def __init__(self, rating_key, item_id, title=None, artist="Phish", album="A"):
+        self.ratingKey = rating_key
+        self.playlistItemID = item_id
+        self.title = title or f"track-{rating_key}"
+        self.grandparentTitle = artist
+        self.originalTitle = None
+        self.parentTitle = album
+
+
+class _FakeEditablePlaylist:
+    def __init__(self, title, rating_key, items=()):
+        self.title = title
+        self.ratingKey = rating_key
+        self.type = "playlist"
+        self._items = list(items)
+        self.deleted = False
+        self._next_id = 1000
+
+    def items(self):
+        return list(self._items)
+
+    def addItems(self, tracks):
+        for t in tracks:                              # library tracks → new items
+            self._items.append(_FakePLItem(
+                t.ratingKey, f"n{self._next_id}", t.title,
+                t.grandparentTitle, t.parentTitle))
+            self._next_id += 1
+
+    def removeItems(self, items):
+        ids = {i.playlistItemID for i in items}
+        self._items = [i for i in self._items if i.playlistItemID not in ids]
+
+    def moveItem(self, item, after=None):
+        self._items.remove(item)
+        if after is None:
+            self._items.insert(0, item)
+        else:
+            self._items.insert(self._items.index(after) + 1, item)
+
+    def editTitle(self, title, locked=True):
+        self.title = title
+
+    def delete(self):
+        self.deleted = True
+
+
+def _edit_plex(monkeypatch, tmp_path, items):
+    pl = _FakeEditablePlaylist("My Mix", 500, items=items)
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex(playlists=[pl]))
+    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "h.json")
+    return pl
+
+
+def test_open_playlist_returns_ordered_rows(monkeypatch, tmp_path):
+    _edit_plex(monkeypatch, tmp_path,
+               [_FakePLItem(10, "i1", "A"), _FakePLItem(11, "i2", "B")])
+    result = m.open_playlist(_CONFIG, "500")
+    assert result["name"] == "My Mix"
+    assert [(r["track_id"], r["item_id"], r["title"]) for r in result["tracks"]] == [
+        ("10", "i1", "A"), ("11", "i2", "B")]
+
+
+def test_open_playlist_missing_raises(monkeypatch):
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex(playlists=[]))
+    with pytest.raises(m.PlexError):
+        m.open_playlist(_CONFIG, "500")
+
+
+def test_apply_edits_adds_and_removes(monkeypatch, tmp_path):
+    pl = _edit_plex(monkeypatch, tmp_path,
+                    [_FakePLItem(10, "i1"), _FakePLItem(11, "i2")])
+    desired = [{"track_id": "10", "item_id": "i1"},   # keep
+               {"track_id": "20"}]                     # add; i2 dropped
+    title, stats = m.apply_playlist_edits(_CONFIG, "500", "My Mix", desired)
+    assert stats == {"added": 1, "removed": 1}
+    assert [i.ratingKey for i in pl.items()] == [10, 20]
+
+
+def test_apply_edits_reorders_in_place(monkeypatch, tmp_path):
+    pl = _edit_plex(monkeypatch, tmp_path,
+                    [_FakePLItem(10, "i1"), _FakePLItem(11, "i2"), _FakePLItem(12, "i3")])
+    desired = [{"track_id": "12", "item_id": "i3"},
+               {"track_id": "10", "item_id": "i1"},
+               {"track_id": "11", "item_id": "i2"}]
+    m.apply_playlist_edits(_CONFIG, "500", "My Mix", desired)
+    assert [i.ratingKey for i in pl.items()] == [12, 10, 11]
+
+
+def test_apply_edits_add_then_reorder(monkeypatch, tmp_path):
+    pl = _edit_plex(monkeypatch, tmp_path, [_FakePLItem(10, "i1")])
+    desired = [{"track_id": "20"},                     # new, goes first
+               {"track_id": "10", "item_id": "i1"}]
+    m.apply_playlist_edits(_CONFIG, "500", "My Mix", desired)
+    assert [i.ratingKey for i in pl.items()] == [20, 10]
+
+
+def test_apply_edits_renames_and_updates_history(monkeypatch, tmp_path):
+    hist = tmp_path / "h.json"
+    m.save_history(hist, {"abc": {"id": "abc", "playlist_rating_key": 500,
+                                  "playlist_name": "Old", "matched": 3}})
+    pl = _edit_plex(monkeypatch, tmp_path, [_FakePLItem(10, "i1")])
+    m.apply_playlist_edits(_CONFIG, "500", "Renamed",
+                           [{"track_id": "10", "item_id": "i1"}])
+    assert pl.title == "Renamed"
+    saved = m.load_history(hist)
+    assert saved["abc"]["playlist_name"] == "Renamed"
+    assert saved["abc"]["matched"] == 1
+
+
+def test_apply_edits_missing_playlist_raises(monkeypatch):
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex(playlists=[]))
+    with pytest.raises(m.PlexError):
+        m.apply_playlist_edits(_CONFIG, "500", "x", [{"track_id": "10"}])
+
+
+def test_delete_playlist_removes_and_forgets_history(monkeypatch, tmp_path):
+    hist = tmp_path / "h.json"
+    m.save_history(hist, {"abc": {"id": "abc", "playlist_rating_key": 500},
+                          "keep": {"id": "keep", "playlist_rating_key": 501}})
+    pl = _edit_plex(monkeypatch, tmp_path, [_FakePLItem(10, "i1")])
+    title = m.delete_playlist(_CONFIG, "500")
+    assert title == "My Mix" and pl.deleted is True
+    saved = m.load_history(hist)
+    assert "abc" not in saved and "keep" in saved
+
+
+def test_delete_playlist_missing_raises(monkeypatch):
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex(playlists=[]))
+    with pytest.raises(m.PlexError):
+        m.delete_playlist(_CONFIG, "500")
