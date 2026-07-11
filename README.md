@@ -194,11 +194,13 @@ panel lists the songs that had no match — search above to add another version,
 or note them for buying.
 
 The top navbar's **History** link lists every playlist you've made, newest
-first, tagged by service. A setlist-seeded row can **Re-open** it in the builder
-or link to its setlist.fm source; a **Plex** one can also **Update** the
-existing playlist — re-match the show against your *current* library and confirm
-the now-available tracks to add. Update is **add-only** (nothing removed), so
-when you buy a missing song you can fold it into the playlist you already made.
+first, tagged by service. A setlist-seeded row can **Re-open** the show in the
+builder (matching it fresh into a *new* playlist) or link to its setlist.fm
+source. A **Plex** playlist can also be **Edit**ed — it opens the live playlist
+in the builder so you can add/remove/reorder its tracks or rename it, then **Save
+changes** applies just the differences (the playlist and its share link are kept)
+— or **Delete**d (with a confirmation; also drops the History entry). Editing and
+deleting are Plex-only for now (YouTube Music editing is deferred — see below).
 From-scratch playlists get a light entry (no setlist to re-open). The **Buy
 list** link aggregates every show's missing tracks into one deduped list,
 grouped by artist, with the album each is from — sourced from setlist.fm's "Songs
@@ -210,8 +212,9 @@ The **Attended** link turns your setlist.fm "I was there" history into a
 worklist. Enter a setlist.fm username (pre-filled from the optional
 `SETLISTFM_USER` in your `.env`) and it lists every show you've marked attended,
 newest first. Each row has a **Build** button that opens it in the builder;
-shows you've already made are flagged `created ✓` with **Re-open** / **Update**
-instead. It reads public attended data, so any public username works.
+shows you've already made are flagged `created ✓` with **Re-open** (and **Edit**
+for a Plex playlist) instead. It reads public attended data, so any public
+username works.
 
 > **Local only.** The app talks to your local Plex server and holds your Plex
 > token (and YouTube Music OAuth), so it binds to `127.0.0.1` and has no
@@ -258,7 +261,10 @@ fail that way, switch to browser auth above.
 
 If no valid auth file is present, YouTube Music is greyed out with a reason and
 everything works Plex-only. `ytmusicapi` is unofficial and the CLI stays
-Plex-only.
+Plex-only. **Editing/deleting** existing YouTube Music playlists is also deferred
+for now — ytmusicapi can't read an owned playlist's contents (a
+`twoColumnBrowseResultsRenderer` parse error), which the smart-diff edit needs;
+creating YTM playlists works fine.
 
 ## Deploy (self-host with Docker)
 
