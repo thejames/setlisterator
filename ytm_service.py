@@ -362,3 +362,23 @@ def create_playlist_ytm(config, name, video_ids, history_meta=None):
     core._record_history(name, playlist_id, len(ids), history_meta,
                          service="ytm")
     return name
+
+
+# Editing existing YouTube Music playlists is deferred: ytmusicapi 1.12.1 can't
+# parse owned-playlist responses (twoColumnBrowseResultsRenderer), so we can't
+# read a playlist's current tracks / setVideoIds to diff against. These stubs
+# keep the builder's edit seam uniform; implement them once reads work.
+_EDIT_UNSUPPORTED = ("Editing YouTube Music playlists isn't supported yet "
+                     "(ytmusicapi can't read owned playlists).")
+
+
+def open_ytm_playlist(config, playlist_id):
+    raise YTMError(_EDIT_UNSUPPORTED)
+
+
+def apply_playlist_edits_ytm(config, playlist_id, name, desired_rows):
+    raise YTMError(_EDIT_UNSUPPORTED)
+
+
+def delete_playlist_ytm(config, playlist_id):
+    raise YTMError(_EDIT_UNSUPPORTED)

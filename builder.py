@@ -147,3 +147,47 @@ def materialize(config, draft):
         return ytm.create_playlist_ytm(config, draft["name"], track_ids,
                                        history_meta)
     return core.create_playlist(config, draft["name"], track_ids, history_meta)
+
+
+# ---------------------------------------------------------------------------
+# Editing an existing playlist: load it into a draft, then apply the diff on
+# save. Dispatches on the draft's service (Plex implemented; YTM stubbed until
+# ytmusicapi can read owned playlists).
+# ---------------------------------------------------------------------------
+
+def open_for_edit(config, service_name, playlist_id):
+    """Load an existing playlist's tracks: ``{name, tracks}`` (rows carry item_id)."""
+    if service_name == "ytm":
+        return ytm.open_ytm_playlist(config, playlist_id)
+    return core.open_playlist(config, playlist_id)
+
+
+def draft_from_playlist(config, service_name, playlist_id):
+    """Build an edit-mode draft seeded from an existing playlist."""
+    opened = open_for_edit(config, service_name, playlist_id)
+    draft = core.new_draft(service_name, name=opened["name"])
+    draft["target_playlist_id"] = str(playlist_id)
+    draft["tracks"] = [dict(t) for t in opened["tracks"]]
+    return draft
+
+
+def apply_edits(config, draft):
+    """Apply an edit-mode draft's changes to its target playlist.
+
+    Returns ``(final_name, stats)``. Raises if the draft isn't in edit mode.
+    """
+    playlist_id = draft.get("target_playlist_id")
+    if not playlist_id:
+        raise ValueError("draft is not editing an existing playlist")
+    if draft["service"] == "ytm":
+        return ytm.apply_playlist_edits_ytm(config, playlist_id, draft["name"],
+                                            draft["tracks"])
+    return core.apply_playlist_edits(config, playlist_id, draft["name"],
+                                     draft["tracks"])
+
+
+def delete_playlist(config, service_name, playlist_id):
+    """Delete a playlist on its service; returns its title."""
+    if service_name == "ytm":
+        return ytm.delete_playlist_ytm(config, playlist_id)
+    return core.delete_playlist(config, playlist_id)

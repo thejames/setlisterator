@@ -199,3 +199,65 @@ def test_history_meta_setlist_source(monkeypatch):
     assert meta["source"] == "setlist"
     assert meta["id"] == "abc123"
     assert meta["missing"] == 1
+
+
+# ---------------------------------------------------------------------------
+# editing an existing playlist (dispatch)
+# ---------------------------------------------------------------------------
+
+def test_draft_from_playlist_builds_edit_draft(monkeypatch):
+    monkeypatch.setattr(core, "open_playlist", lambda cfg, pid: {
+        "name": "My Mix",
+        "tracks": [{"track_id": "10", "item_id": "i1", "title": "A",
+                    "artist": "Phish", "album": "Junta"}]})
+    draft = b.draft_from_playlist(_CONFIG, "plex", "500")
+    assert draft["service"] == "plex"
+    assert draft["name"] == "My Mix"
+    assert draft["target_playlist_id"] == "500"
+    assert draft["seed"] is None
+    assert draft["tracks"][0]["item_id"] == "i1"
+
+
+def test_open_for_edit_ytm_raises(monkeypatch):
+    import ytm_service as ytm
+    with pytest.raises(ytm.YTMError):
+        b.open_for_edit(_CONFIG, "ytm", "PL123")
+
+
+def test_apply_edits_dispatches_to_plex(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(core, "apply_playlist_edits",
+                        lambda cfg, pid, name, rows: seen.update(
+                            pid=pid, name=name, rows=rows) or ("New", {"added": 1}))
+    draft = core.new_draft("plex", name="New")
+    draft["target_playlist_id"] = "500"
+    draft["tracks"] = [{"track_id": "10", "item_id": "i1"}, {"track_id": "20"}]
+    name, stats = b.apply_edits(_CONFIG, draft)
+    assert name == "New" and stats == {"added": 1}
+    assert seen["pid"] == "500"
+    assert seen["rows"] == draft["tracks"]
+
+
+def test_apply_edits_without_target_raises():
+    draft = core.new_draft("plex", name="x")   # target_playlist_id is None
+    with pytest.raises(ValueError):
+        b.apply_edits(_CONFIG, draft)
+
+
+def test_apply_edits_ytm_raises():
+    import ytm_service as ytm
+    draft = core.new_draft("ytm", name="x")
+    draft["target_playlist_id"] = "PL1"
+    with pytest.raises(ytm.YTMError):
+        b.apply_edits(_CONFIG, draft)
+
+
+def test_delete_playlist_dispatches(monkeypatch):
+    monkeypatch.setattr(core, "delete_playlist", lambda cfg, pid: f"deleted-{pid}")
+    assert b.delete_playlist(_CONFIG, "plex", "500") == "deleted-500"
+
+
+def test_delete_playlist_ytm_raises():
+    import ytm_service as ytm
+    with pytest.raises(ytm.YTMError):
+        b.delete_playlist(_CONFIG, "ytm", "PL1")
