@@ -39,7 +39,7 @@
         <form method="post" action="{{ url_for('builder_seed') }}" style="margin:0"
               data-loading="Matching…">
           <input type="hidden" name="setlist" value="{{ s.url or s.id }}">
-          <button type="submit">Re-open</button>
+          <button type="submit" title="Match the show again into a new playlist">New from show</button>
         </form>
         {% if s.prior.get("service", "plex") == "plex" and s.prior.get("playlist_rating_key") %}
         <form method="post" action="{{ url_for('builder_edit') }}" style="margin:0"

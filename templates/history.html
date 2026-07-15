@@ -32,7 +32,7 @@
               data-loading="Matching…">
           <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
           <input type="hidden" name="service" value="{{ e.get('service', 'plex') }}">
-          <button type="submit" title="Match the show again into a new playlist">Re-open</button>
+          <button type="submit" title="Match the show again into a new playlist">New from show</button>
         </form>
         {% endif %}
         {% if editable %}

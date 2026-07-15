@@ -37,6 +37,12 @@
   .htmx-indicator { opacity:0; transition:opacity .2s; }
   .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity:1; }
   .searchbox { width:100%; max-width:none; }
+
+  .mode-banner { margin:14px 0 2px; padding:10px 14px; border-radius:10px;
+    font-size:13px; color:var(--text2); background:var(--panel2);
+    border:1px solid var(--border); border-left:3px solid var(--accent); }
+  .mode-banner.edit { border-left-color:var(--blue); }
+  .mode-banner b { color:var(--text); }
 </style>
 {% endblock %}
 
@@ -59,6 +65,21 @@
 
 <input class="title-input" form="save-form" name="name" value="{{ draft.name }}"
        aria-label="Playlist name" placeholder="Playlist name">
+
+{% if draft.target_playlist_id %}
+<div class="mode-banner edit">
+  <b>Editing an existing playlist.</b> Saving updates it in place — nothing new is created.
+</div>
+{% elif draft.seed %}
+<div class="mode-banner">
+  <b>New playlist from {{ draft.seed.artist }}{% if draft.seed.date %} ({{ draft.seed.date }}){% endif %}.</b>
+  Matched fresh against your {{ service_label }} library — saving creates a new playlist.
+</div>
+{% else %}
+<div class="mode-banner">
+  <b>New playlist.</b> Saving creates a new playlist.
+</div>
+{% endif %}
 
 <div class="builder-grid" style="margin-top:22px">
   <div>

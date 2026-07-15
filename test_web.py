@@ -272,6 +272,21 @@ def test_builder_open_missing_draft(client, drafts):
     assert "Draft not found" in body
 
 
+def test_builder_create_mode_banner(client, drafts):
+    d = _seed(drafts)                               # from-scratch, no target
+    body = client.get(f"/builder/{d['id']}").data.decode()
+    assert "Saving creates a new playlist" in body
+    assert "Save to Plex" in body
+
+
+def test_builder_edit_mode_banner(client, drafts):
+    d = _seed(drafts, tracks=[{"track_id": "10", "item_id": "i1"}])
+    d["target_playlist_id"] = "500"
+    body = client.get(f"/builder/{d['id']}").data.decode()
+    assert "updates it in place" in body            # edit-mode banner
+    assert "Save changes" in body
+
+
 def test_builder_search_returns_fragment(client, drafts, monkeypatch):
     d = _seed(drafts)
     monkeypatch.setattr(bld, "search", lambda cfg, svc, q: [
