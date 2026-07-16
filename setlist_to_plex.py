@@ -368,23 +368,14 @@ def get_music_section(plex, section_name):
     return section
 
 
-class PlexService:
-    """Adapter letting gather_matches target a music backend.
+def connect_plex_section(config):
+    """Return the ``(client, section)`` pair the matcher searches against.
 
-    ``connect`` returns the ``(client, section)`` pair the matcher searches
-    against. It calls the module-level ``connect_plex``/``get_music_section`` by
-    name (not via ``self``) so tests that monkeypatch those still take effect.
+    Calls the module-level ``connect_plex``/``get_music_section`` by name so
+    tests that monkeypatch those still take effect.
     """
-
-    name = "plex"
-
-    def connect(self, config):
-        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
-        section = get_music_section(plex, config["music_library"])
-        return plex, section
-
-
-PLEX_SERVICE = PlexService()
+    plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    return plex, get_music_section(plex, config["music_library"])
 
 
 def _track_artist_name(track):
@@ -690,17 +681,16 @@ def save_drafts(drafts, path=None):
     _save_json_store(path or draft_path(), drafts)
 
 
-def new_draft(service, name="", seed=None):
-    """Build a fresh in-progress builder draft for the given service.
+def new_draft(name="", seed=None):
+    """Build a fresh in-progress builder draft.
 
-    A draft is one service's playlist-in-progress: an ordered ``tracks`` list
-    plus optional ``seed`` metadata (from a setlist.fm show) so Save can record
-    history without re-matching. Not persisted here; the caller saves it.
+    A draft is a playlist-in-progress: an ordered ``tracks`` list plus optional
+    ``seed`` metadata (from a setlist.fm show) so Save can record history
+    without re-matching. Not persisted here; the caller saves it.
     """
     now = datetime.now().isoformat(timespec="seconds")
     return {
         "id": uuid.uuid4().hex,
-        "service": service,
         "name": name,
         "created_at": now,
         "updated_at": now,
@@ -918,18 +908,14 @@ def print_report(playlist_name, added_count, missing, fuzzy):
 # Core pipeline (shared by the CLI and the web app)
 # ---------------------------------------------------------------------------
 
-def gather_matches(config, setlist_id, name=None, prefer_album=None,
-                   service=None):
-    """Fetch a setlist and match every song against a music service's catalog.
+def gather_matches(config, setlist_id, name=None, prefer_album=None):
+    """Fetch a setlist and match every song against the Plex library.
 
     Read-only: no playlist is created. Returns a dict with the show metadata,
     the resolved playlist name, and matched/missing/fuzzy lists (matched
     entries are deduped and carry the track rating key so a playlist can be
     built later without re-matching). Raises SetlistError or PlexError (with
     a human-readable message) on failure.
-
-    ``service`` selects the backend to match against (a PlexService by default);
-    it supplies the ``(client, section)`` the two-tier matcher searches.
 
     ``prefer_album`` biases which version of a song is chosen when it exists on
     several albums: ``None`` auto-detects a cohesive album (e.g. a live recording
@@ -953,9 +939,8 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None,
     if show["url"]:
         logger.info("Source:  %s", show["url"])
 
-    service = service or PLEX_SERVICE
     try:
-        _client, section = service.connect(config)
+        _client, section = connect_plex_section(config)
     except (PermissionError, ConnectionError, LookupError) as exc:
         raise PlexError(str(exc)) from exc
 
@@ -1052,17 +1037,12 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None,
         "fuzzy": fuzzy,
         "preferred_album": preferred_album,
         "album_options": album_options,
-        "service": service.name,
     }
 
 
 def _record_history(playlist_name, playlist_rating_key, matched_count,
-                    history_meta, service="plex"):
-    """Write/merge the history entry for a created or updated playlist.
-
-    ``service`` tags which backend the playlist lives in ("plex"/"ytm"); older
-    entries without the key are read as "plex" for backward compatibility.
-    """
+                    history_meta):
+    """Write/merge the history entry for a created or updated playlist."""
     if not (history_meta and history_meta.get("id")):
         return
     setlist_id = history_meta["id"]
@@ -1076,7 +1056,6 @@ def _record_history(playlist_name, playlist_rating_key, matched_count,
         "date": history_meta.get("date", entry.get("date", "")),
         "playlist_name": playlist_name,
         "playlist_rating_key": playlist_rating_key,
-        "service": service,
         "source": history_meta.get("source", "setlist"),
         "processed_at": datetime.now().isoformat(timespec="seconds"),
         "matched": matched_count,

@@ -435,8 +435,8 @@ def test_drafts_save_then_load_round_trip(tmp_path):
 
 
 def test_new_draft_shape():
-    draft = m.new_draft("ytm", name="Mix", seed={"setlist_id": "abc"})
-    assert draft["service"] == "ytm"
+    draft = m.new_draft(name="Mix", seed={"setlist_id": "abc"})
+    assert "service" not in draft
     assert draft["name"] == "Mix"
     assert draft["seed"] == {"setlist_id": "abc"}
     assert draft["tracks"] == []
@@ -446,7 +446,7 @@ def test_new_draft_shape():
 
 
 def test_new_draft_ids_are_unique():
-    assert m.new_draft("plex")["id"] != m.new_draft("plex")["id"]
+    assert m.new_draft()["id"] != m.new_draft()["id"]
 
 
 def test_should_process_new_id():
@@ -907,48 +907,17 @@ def test_gather_matches_builds_structure(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# service seam (Phase 1): gather_matches targets a pluggable MusicService
+# Plex connection helper
 # ---------------------------------------------------------------------------
 
-class _FakeService:
-    """Minimal MusicService: connect() hands back a (client, section) pair."""
-
-    def __init__(self, section, name="fake"):
-        self.name = name
-        self._section = section
-        self.connected_with = None
-
-    def connect(self, config):
-        self.connected_with = config
-        return object(), self._section
-
-
-def test_gather_matches_tags_service_default_plex(monkeypatch):
-    _wire_gather(monkeypatch, [_FakeTrack("Wilson", "Phish", rating_key=10)])
-    result = m.gather_matches(_CONFIG, "abc123")
-    assert result["service"] == "plex"
-
-
-def test_gather_matches_uses_injected_service(monkeypatch):
-    monkeypatch.setattr(m, "fetch_setlist", lambda sid, key: _gather_setlist_data())
-    monkeypatch.setattr(m, "fetch_album_map", lambda url: {})
-    section = _FakeSection(artists=[
-        _FakeArtist("Phish", [_FakeTrack("Wilson", "Phish", rating_key=10)])])
-    svc = _FakeService(section)
-    result = m.gather_matches(_CONFIG, "abc123", service=svc)
-    assert result["service"] == "fake"
-    assert svc.connected_with is _CONFIG            # the service did the connecting
-    assert result["matched"][0]["rating_key"] == 10  # matcher ran against its section
-
-
-def test_plex_service_connect_uses_module_functions(monkeypatch):
+def test_connect_plex_section_uses_module_functions(monkeypatch):
+    """Calls connect_plex/get_music_section by name, so tests can patch them."""
     sentinel_client, sentinel_section = object(), object()
     monkeypatch.setattr(m, "connect_plex", lambda u, t: sentinel_client)
     monkeypatch.setattr(m, "get_music_section", lambda plex, lib: sentinel_section)
-    client, section = m.PLEX_SERVICE.connect(_CONFIG)
+    client, section = m.connect_plex_section(_CONFIG)
     assert client is sentinel_client
     assert section is sentinel_section
-    assert m.PLEX_SERVICE.name == "plex"
 
 
 def test_gather_matches_attaches_multiple_candidates(monkeypatch):
@@ -1126,7 +1095,7 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     assert saved["abc123"]["playlist_name"] == "Phish - MSG"
     assert saved["abc123"]["matched"] == 2
     assert saved["abc123"]["playlist_rating_key"] == 999   # key stored for update
-    assert saved["abc123"]["service"] == "plex"             # backend tag defaults to Plex
+    assert "service" not in saved["abc123"]                 # no service tag anywhere
     assert saved["abc123"]["missing_tracks"] == [
         {"artist": "Phish", "title": "Destiny Unbound"}]
 

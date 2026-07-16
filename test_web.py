@@ -2,7 +2,7 @@
 
 The core pipeline (load_config / gather_matches / builder.materialize / search)
 is monkeypatched so these exercise routing and rendering only — no network, no
-Plex, no setlist.fm, no YouTube Music.
+Plex, no setlist.fm.
 """
 
 import pytest
@@ -10,7 +10,6 @@ import pytest
 import builder as bld
 import setlist_to_plex as core
 import web
-import ytm_service as ytm
 from web import app
 
 
@@ -19,8 +18,6 @@ def client(monkeypatch):
     monkeypatch.setattr(core, "load_config", lambda: {
         "api_key": "k", "plex_baseurl": "http://x", "plex_token": "t",
         "music_library": "Music"})
-    # YouTube Music off by default (no OAuth file); tests opt in explicitly.
-    monkeypatch.setenv("YTM_OAUTH_FILE", "/nonexistent/ytm_oauth.json")
     app.config.update(TESTING=True)
     return app.test_client()
 
@@ -62,15 +59,15 @@ def test_index_ok(client):
     resp = client.get("/")
     assert resp.status_code == 200
     body = resp.data.decode()
-    assert "Destination" in body                    # service picker
     assert 'action="/builder/seed"' in body         # seeds the builder
-    assert "YouTube Music" in body                   # both destinations offered
     assert "app.js" in body
 
 
-def test_index_ytm_disabled_when_unavailable(client):
+def test_index_has_no_service_picker(client):
+    """Plex is the only destination — no picker, no YouTube Music."""
     body = client.get("/").data.decode()
-    assert "not configured" in body                 # YTM greyed out with reason
+    assert "Destination" not in body
+    assert "YouTube Music" not in body
 
 
 def test_port_default_and_override(monkeypatch):
@@ -150,13 +147,12 @@ def test_history_builder_entry_has_no_setlist_actions(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {
         "builder-xyz": {"id": "builder-xyz", "playlist_name": "Road Trip",
                         "processed_at": "2026-07-01", "matched": 12,
-                        "service": "ytm", "source": "builder"},
+                        "source": "builder"},
     })
     body = client.get("/history").data.decode()
     assert "Road Trip" in body
     assert "Built from scratch" in body           # Show column labeled, not blank ()
     assert "()" not in body                        # no empty artist/date placeholder
-    assert "built in YouTube Music" in body
     assert 'action="/builder/seed"' not in body   # no Re-open for a from-scratch entry
 
 
@@ -166,55 +162,14 @@ def test_history_empty(client, monkeypatch):
     assert "No history yet" in body
 
 
-# --- connect YouTube Music -------------------------------------------------
-
-def test_index_shows_connect_link_when_ytm_unavailable(client, monkeypatch):
-    monkeypatch.setattr(ytm, "browser_connect_available", lambda: True)
-    body = client.get("/").data.decode()
-    assert 'href="/ytm/connect"' in body          # YTM off (fixture) → offer connect
-
-
-def test_ytm_connect_lists_sources_with_accounts(client, monkeypatch):
-    monkeypatch.setattr(ytm, "browser_connect_available", lambda: True)
-    monkeypatch.setattr(ytm, "list_ytm_sources",
-                        lambda: [{"id": "safari", "label": "Safari"},
-                                 {"id": "chrome:Profile 3", "label": "Chrome — Profile 3"}])
-    monkeypatch.setattr(ytm, "ytm_source_account",
-                        lambda sid: "James Zambon" if sid == "safari" else None)
-    body = client.get("/ytm/connect").data.decode()
-    assert "James Zambon" in body                 # resolved account name
-    assert "Safari" in body and "Chrome — Profile 3" in body
-    assert 'value="safari"' in body               # source id to submit
-
-
-def test_ytm_connect_unavailable_without_deps(client, monkeypatch):
-    monkeypatch.setattr(ytm, "browser_connect_available", lambda: False)
-    body = client.get("/ytm/connect").data.decode()
-    assert "browser_cookie3" in body
-
-
-def test_ytm_connect_save_writes_and_redirects(client, monkeypatch):
-    seen = {}
-    monkeypatch.setattr(ytm, "connect_ytm_source",
-                        lambda sid: seen.setdefault("id", sid))
-    resp = client.post("/ytm/connect", data={"source": "safari"})
-    assert resp.status_code == 302
-    assert seen["id"] == "safari"
-
-
-def test_ytm_connect_save_requires_source(client):
-    resp = client.post("/ytm/connect", data={})
-    assert resp.status_code == 400
-
-
 # --- builder: seeding ------------------------------------------------------
 
 def test_seed_empty_creates_draft_and_redirects(client, drafts):
-    resp = client.post("/builder/seed", data={"service": "plex", "name": "Mix"})
+    resp = client.post("/builder/seed", data={"name": "Mix"})
     assert resp.status_code == 302
     assert len(drafts) == 1
     draft = next(iter(drafts.values()))
-    assert draft["service"] == "plex"
+    assert "service" not in draft                  # no service tag anywhere
     assert draft["name"] == "Mix"
     assert draft["tracks"] == []
     assert f"/builder/{draft['id']}" in resp.headers["Location"]
@@ -224,18 +179,11 @@ def test_seed_from_setlist_populates_tracks(client, drafts, monkeypatch):
     monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
     monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
     resp = client.post("/builder/seed",
-                       data={"service": "plex", "setlist": "abc123"})
+                       data={"setlist": "abc123"})
     assert resp.status_code == 302
     draft = next(iter(drafts.values()))
     assert [t["track_id"] for t in draft["tracks"]] == ["10", "20"]
     assert draft["seed"]["missing_tracks"][0]["title"] == "Jilly's on Smack"
-
-
-def test_seed_ytm_unavailable_errors(client, drafts):
-    resp = client.post("/builder/seed", data={"service": "ytm"})
-    body = resp.data.decode()
-    assert "YouTube Music" in body
-    assert len(drafts) == 0                       # nothing persisted
 
 
 def test_seed_setlist_error(client, drafts, monkeypatch):
@@ -245,14 +193,14 @@ def test_seed_setlist_error(client, drafts, monkeypatch):
         raise core.SetlistError("no songs")
     monkeypatch.setattr(core, "gather_matches", boom)
     body = client.post("/builder/seed",
-                       data={"service": "plex", "setlist": "abc"}).data.decode()
+                       data={"setlist": "abc"}).data.decode()
     assert "no songs" in body
 
 
 # --- builder: open / mutate ------------------------------------------------
 
-def _seed(store, service="plex", tracks=()):
-    draft = core.new_draft(service, name="Mix")
+def _seed(store, tracks=()):
+    draft = core.new_draft(name="Mix")
     draft["tracks"] = [dict(t) for t in tracks]
     store[draft["id"]] = draft
     return draft
@@ -289,7 +237,7 @@ def test_builder_edit_mode_banner(client, drafts):
 
 def test_builder_search_returns_fragment(client, drafts, monkeypatch):
     d = _seed(drafts)
-    monkeypatch.setattr(bld, "search", lambda cfg, svc, q: [
+    monkeypatch.setattr(bld, "search", lambda cfg, q: [
         {"track_id": "99", "title": "Wilson", "artist": "Phish", "album": "Junta"}])
     body = client.get(f"/builder/{d['id']}/search?q=wilson").data.decode()
     assert "Wilson" in body
@@ -359,13 +307,6 @@ def test_builder_save_materializes_and_deletes(client, drafts, monkeypatch):
     assert d["id"] not in drafts                   # draft consumed
 
 
-def test_builder_save_ytm_label(client, drafts, monkeypatch):
-    d = _seed(drafts, service="ytm", tracks=[{"track_id": "v1"}])
-    monkeypatch.setattr(bld, "materialize", lambda c, dr: dr["name"])
-    body = client.post(f"/builder/{d['id']}/save", data={"name": "YT"}).data.decode()
-    assert "Playlist created in YouTube Music" in body
-
-
 def test_builder_save_empty_rejected(client, drafts):
     d = _seed(drafts)                              # no tracks
     resp = client.post(f"/builder/{d['id']}/save", data={"name": "Mix"})
@@ -398,7 +339,7 @@ def test_builder_discard(client, drafts):
 
 def test_history_editable_plex_row_has_edit_and_delete(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {
-        "abc": {"id": "abc", "service": "plex", "source": "setlist",
+        "abc": {"id": "abc", "source": "setlist",
                 "playlist_name": "Primus — TD Amp", "playlist_rating_key": 500,
                 "artist": "Primus", "date": "2026-06-16", "matched": 10,
                 "processed_at": "2026-07-01"}})
@@ -408,33 +349,33 @@ def test_history_editable_plex_row_has_edit_and_delete(client, monkeypatch):
     assert "/playlist/delete?" in body
 
 
-def test_history_ytm_row_not_editable(client, monkeypatch):
+def test_history_row_without_rating_key_not_editable(client, monkeypatch):
+    """An entry with no Plex rating key offers no Edit/Delete."""
     monkeypatch.setattr(core, "load_history", lambda path: {
-        "z": {"id": "z", "service": "ytm", "source": "setlist",
-              "playlist_name": "Zakk", "playlist_rating_key": "PL1",
+        "z": {"id": "z", "source": "setlist", "playlist_name": "Zakk",
               "processed_at": "2026-07-01"}})
     body = client.get("/history").data.decode()
-    assert 'action="/builder/edit"' not in body      # YTM edit deferred
+    assert 'action="/builder/edit"' not in body
     assert "/playlist/delete?" not in body
 
 
 def test_builder_edit_opens_draft(client, drafts, monkeypatch):
-    monkeypatch.setattr(bld, "draft_from_playlist", lambda cfg, svc, pid:
-                        core.new_draft(svc, name="My Mix") | {
+    monkeypatch.setattr(bld, "draft_from_playlist", lambda cfg, pid:
+                        core.new_draft(name="My Mix") | {
                             "target_playlist_id": pid})
     resp = client.post("/builder/edit",
-                       data={"service": "plex", "playlist_id": "500"})
+                       data={"playlist_id": "500"})
     assert resp.status_code == 302
     draft = next(iter(drafts.values()))
     assert draft["target_playlist_id"] == "500"
 
 
 def test_builder_edit_playlist_gone(client, drafts, monkeypatch):
-    def boom(cfg, svc, pid):
+    def boom(cfg, pid):
         raise core.PlexError("no longer exists")
     monkeypatch.setattr(bld, "draft_from_playlist", boom)
     body = client.post("/builder/edit",
-                       data={"service": "plex", "playlist_id": "500"}).data.decode()
+                       data={"playlist_id": "500"}).data.decode()
     assert "no longer exists" in body
 
 
@@ -457,7 +398,7 @@ def test_builder_save_edit_applies_and_deletes(client, drafts, monkeypatch):
 
 def test_delete_confirm_page(client):
     body = client.get("/playlist/delete",
-                      query_string={"service": "plex", "id": "500",
+                      query_string={"id": "500",
                                     "name": "My Mix"}).data.decode()
     assert "Delete this playlist?" in body
     assert "My Mix" in body
@@ -467,10 +408,10 @@ def test_delete_confirm_page(client):
 def test_delete_executes_and_redirects(client, monkeypatch):
     seen = {}
     monkeypatch.setattr(bld, "delete_playlist",
-                        lambda cfg, svc, pid: seen.update(svc=svc, pid=pid))
-    resp = client.post("/playlist/delete", data={"service": "plex", "id": "500"})
+                        lambda cfg, pid: seen.update(pid=pid))
+    resp = client.post("/playlist/delete", data={"id": "500"})
     assert resp.status_code == 302
-    assert seen == {"svc": "plex", "pid": "500"}
+    assert seen == {"pid": "500"}
 
 
 # --- attended --------------------------------------------------------------

@@ -6,7 +6,6 @@
   .dest-badge { display:inline-flex; align-items:center; gap:7px; font-size:12px;
     font-weight:600; color:var(--muted); background:var(--panel2);
     border:1px solid var(--border); border-radius:999px; padding:4px 12px; }
-  .dest-badge b { color:var(--text); }
   .builder-grid { display:grid; grid-template-columns: 1.2fr .8fr; gap:22px;
     align-items:start; }
   @media (max-width: 860px) { .builder-grid { grid-template-columns: 1fr; } }
@@ -49,9 +48,7 @@
 {% block content %}
 <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:6px">
   {% if draft.target_playlist_id %}
-  <span class="dest-badge">✎ Editing in <b>{{ service_label }}</b></span>
-  {% else %}
-  <span class="dest-badge">◆ Destination <b>{{ service_label }}</b></span>
+  <span class="dest-badge">✎ Editing existing playlist</span>
   {% endif %}
   {% if draft.seed %}
   <span class="meta" style="margin:0">
@@ -73,7 +70,7 @@
 {% elif draft.seed %}
 <div class="mode-banner">
   <b>New playlist from {{ draft.seed.artist }}{% if draft.seed.date %} ({{ draft.seed.date }}){% endif %}.</b>
-  Matched fresh against your {{ service_label }} library — saving creates a new playlist.
+  Matched fresh against your Plex library — saving creates a new playlist.
 </div>
 {% else %}
 <div class="mode-banner">
@@ -90,16 +87,16 @@
   </div>
 
   <div>
-    <div class="label">Add from {{ service_label }}</div>
+    <div class="label">Add from Plex</div>
     <input class="searchbox" type="search" name="q" autocomplete="off"
-           placeholder="Search {{ service_label }}…"
+           placeholder="Search Plex…"
            hx-get="{{ url_for('builder_search', draft_id=draft.id) }}"
            hx-trigger="keyup changed delay:300ms, search"
            hx-target="#search-results">
     <span class="hint htmx-indicator" id="search-spin">searching…</span>
     <div id="search-results" style="margin-top:8px"></div>
 
-    {% if draft.seed and draft.service == "plex" and draft.seed.missing_tracks %}
+    {% if draft.seed and draft.seed.missing_tracks %}
     <div class="section-head" style="margin-top:26px">
       <span class="dot red"></span>
       <span class="t">Not in your library ({{ draft.seed.missing_tracks|length }})</span>
@@ -130,9 +127,9 @@
     </form>
     <form id="save-form" method="post"
           action="{{ url_for('builder_save', draft_id=draft.id) }}"
-          data-loading="Saving to {{ service_label }}…">
+          data-loading="Saving…">
       <button type="submit" class="btn-accent">
-        {{ "Save changes" if draft.target_playlist_id else "Save to " + service_label }}</button>
+        {{ "Save changes" if draft.target_playlist_id else "Save to Plex" }}</button>
     </form>
   </div>
 </div>

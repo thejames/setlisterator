@@ -14,7 +14,7 @@ network. It wraps the core pipeline plus the playlist builder:
 
     builder.seed_from_setlist() -> a draft seeded from a setlist.fm show
     builder.search()/add/remove/reorder -> assemble the draft interactively
-    builder.materialize()       -> commit the draft to Plex or YouTube Music
+    builder.materialize()       -> commit the draft to Plex
 """
 
 import os
@@ -23,23 +23,12 @@ from flask import Flask, redirect, render_template, request, url_for
 
 import builder as bld
 import setlist_to_plex as core
-import ytm_service as ytm
 
 app = Flask(__name__)
 
 
 def _error(title, message, status=200):
     return render_template("error.html", title=title, message=message), status
-
-
-def _web_config():
-    """Core config plus the YouTube Music OAuth path + client creds (raises
-    ConfigError from load_config)."""
-    client_id, client_secret = ytm.ytm_client_creds()
-    return {**core.load_config(),
-            "ytm_oauth_path": ytm.ytm_oauth_path(),
-            "ytm_client_id": client_id,
-            "ytm_client_secret": client_secret}
 
 
 def _load_draft(draft_id):
@@ -69,8 +58,7 @@ def index():
         core.load_config()
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
-    return render_template("index.html", ytm=ytm.load_ytm_config(),
-                           ytm_can_connect=ytm.browser_connect_available())
+    return render_template("index.html")
 
 
 @app.get("/history")
@@ -129,8 +117,7 @@ def attended():
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
     return render_template("attended.html",
-                           username=os.environ.get("SETLISTFM_USER", ""),
-                           ytm=ytm.load_ytm_config())
+                           username=os.environ.get("SETLISTFM_USER", ""))
 
 
 @app.post("/attended")
@@ -139,7 +126,6 @@ def attended_load():
     username = (request.form.get("username") or "").strip()
     if not username:
         return render_template("attended.html", username="",
-                               ytm=ytm.load_ytm_config(),
                                error="Enter a setlist.fm username.")
     try:
         config = core.load_config()
@@ -148,7 +134,7 @@ def attended_load():
         return _error("Configuration needed", str(exc))
     except LookupError as exc:           # unknown / private user
         return render_template("attended.html", username=username,
-                               ytm=ytm.load_ytm_config(), error=str(exc))
+                               error=str(exc))
     except (PermissionError, ConnectionError) as exc:
         return _error("setlist.fm problem", str(exc))
     except Exception as exc:             # any other API hiccup
@@ -159,38 +145,7 @@ def attended_load():
     seen = core.load_history(core.history_path())
     for show in shows:
         show["prior"] = seen.get(show.get("id"))
-    return render_template("attended.html", username=username, shows=shows,
-                           ytm=ytm.load_ytm_config())
-
-
-# ---------------------------------------------------------------------------
-# Connect YouTube Music (one-click, from a logged-in browser)
-# ---------------------------------------------------------------------------
-
-@app.get("/ytm/connect")
-def ytm_connect():
-    """Show browser sources with a YouTube session, labeled by account."""
-    if not ytm.browser_connect_available():
-        return _error("Can't auto-connect",
-                      "Install browser_cookie3 (pip install browser_cookie3) to "
-                      "connect YouTube Music from your browser.")
-    sources = ytm.list_ytm_sources()
-    for s in sources:                       # annotate with the account name
-        s["account"] = ytm.ytm_source_account(s["id"])
-    return render_template("ytm_connect.html", sources=sources)
-
-
-@app.post("/ytm/connect")
-def ytm_connect_save():
-    """Write the auth file from the chosen browser source."""
-    source_id = (request.form.get("source") or "").strip()
-    if not source_id:
-        return _error("No source chosen", "Pick a browser to connect from.", 400)
-    try:
-        ytm.connect_ytm_source(source_id)
-    except ytm.YTMError as exc:
-        return _error("Couldn't connect YouTube Music", str(exc))
-    return redirect(url_for("index"))
+    return render_template("attended.html", username=username, shows=shows)
 
 
 # ---------------------------------------------------------------------------
@@ -200,29 +155,25 @@ def ytm_connect_save():
 @app.post("/builder/seed")
 def builder_seed():
     """Create a draft — seeded from a setlist, or empty — and open it."""
-    service = "ytm" if request.form.get("service") == "ytm" else "plex"
     setlist_arg = (request.form.get("setlist") or "").strip()
     name = (request.form.get("name") or "").strip() or None
     prefer_album = request.form.get("prefer_album")
 
-    if service == "ytm" and not ytm.load_ytm_config()["available"]:
-        return _error("YouTube Music unavailable",
-                      ytm.load_ytm_config()["reason"])
     try:
-        config = _web_config()
+        config = core.load_config()
         if setlist_arg:
-            draft = bld.seed_from_setlist(config, service, setlist_arg,
-                                          name, prefer_album)
+            draft = bld.seed_from_setlist(config, setlist_arg, name,
+                                          prefer_album)
         else:
-            draft = bld.empty_draft(service, name or "")
+            draft = bld.empty_draft(name or "")
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
     except ValueError as exc:
         return _error("Couldn't read that setlist", str(exc), 400)
     except core.SetlistError as exc:
         return _error("Setlist problem", str(exc))
-    except (core.PlexError, ytm.YTMError) as exc:
-        return _error("Music service problem", str(exc))
+    except core.PlexError as exc:
+        return _error("Plex problem", str(exc))
 
     _persist(draft)
     return redirect(url_for("builder_open", draft_id=draft["id"]))
@@ -236,8 +187,7 @@ def builder_open(draft_id):
         return _error("Draft not found",
                       "That draft is gone (already saved, or discarded). "
                       "Start a new one.")
-    return render_template("builder.html", draft=draft,
-                           service_label=_SERVICE_LABEL[draft["service"]])
+    return render_template("builder.html", draft=draft)
 
 
 @app.get("/builder/<draft_id>/search")
@@ -250,11 +200,11 @@ def builder_search(draft_id):
     if not q:
         return ""   # clear the results area
     try:
-        results = bld.search(_web_config(), draft["service"], q)
+        results = bld.search(core.load_config(), q)
     except core.ConfigError as exc:
         return f'<p class="hint">{exc}</p>', 200
     except (PermissionError, ConnectionError, LookupError,
-            core.PlexError, ytm.YTMError) as exc:
+            core.PlexError) as exc:
         return f'<p class="hint">Search failed: {exc}</p>', 200
     except Exception as exc:  # any other backend hiccup
         return f'<p class="hint">Search failed: {exc}</p>', 200
@@ -324,38 +274,35 @@ def builder_save(draft_id):
     editing = bool(draft.get("target_playlist_id"))
     try:
         if editing:
-            final_name, stats = bld.apply_edits(_web_config(), draft)
+            final_name, stats = bld.apply_edits(core.load_config(), draft)
         else:
-            final_name = bld.materialize(_web_config(), draft)
+            final_name = bld.materialize(core.load_config(), draft)
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
-    except (core.PlexError, ytm.YTMError) as exc:
-        return _error("Music service problem", str(exc))
+    except core.PlexError as exc:
+        return _error("Plex problem", str(exc))
 
     _delete_draft(draft_id)
-    label = _SERVICE_LABEL[draft["service"]]
     if editing:
         return render_template("created.html", name=final_name, edited=True,
                                added=len(draft["tracks"]), stats=stats,
-                               missing=[], service_label=label)
+                               missing=[])
     missing = (draft.get("seed") or {}).get("missing_tracks", [])
     return render_template("created.html", name=final_name,
-                           added=len(draft["tracks"]), missing=missing,
-                           service_label=label)
+                           added=len(draft["tracks"]), missing=missing)
 
 
 @app.post("/builder/edit")
 def builder_edit():
     """Open an existing playlist into the builder for editing."""
-    service = "ytm" if request.form.get("service") == "ytm" else "plex"
     playlist_id = (request.form.get("playlist_id") or "").strip()
     if not playlist_id:
         return _error("No playlist", "Nothing to edit.", 400)
     try:
-        draft = bld.draft_from_playlist(_web_config(), service, playlist_id)
+        draft = bld.draft_from_playlist(core.load_config(), playlist_id)
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
-    except (core.PlexError, ytm.YTMError) as exc:
+    except core.PlexError as exc:
         return _error("Couldn't open that playlist", str(exc))
     _persist(draft)
     return redirect(url_for("builder_open", draft_id=draft["id"]))
@@ -364,26 +311,22 @@ def builder_edit():
 @app.get("/playlist/delete")
 def playlist_delete_confirm():
     """Confirmation page before deleting a playlist."""
-    service = "ytm" if request.args.get("service") == "ytm" else "plex"
     playlist_id = (request.args.get("id") or "").strip()
     if not playlist_id:
         return _error("No playlist", "Nothing to delete.", 400)
-    return render_template("confirm_delete.html", service=service,
-                           playlist_id=playlist_id,
-                           name=request.args.get("name", ""),
-                           service_label=_SERVICE_LABEL[service])
+    return render_template("confirm_delete.html", playlist_id=playlist_id,
+                           name=request.args.get("name", ""))
 
 
 @app.post("/playlist/delete")
 def playlist_delete():
-    """Delete a playlist from its service (and drop its history entry)."""
-    service = "ytm" if request.form.get("service") == "ytm" else "plex"
+    """Delete a playlist from Plex (and drop its history entry)."""
     playlist_id = (request.form.get("id") or "").strip()
     try:
-        bld.delete_playlist(_web_config(), service, playlist_id)
+        bld.delete_playlist(core.load_config(), playlist_id)
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
-    except (core.PlexError, ytm.YTMError) as exc:
+    except core.PlexError as exc:
         return _error("Couldn't delete playlist", str(exc))
     return redirect(url_for("history"))
 
@@ -393,9 +336,6 @@ def builder_discard(draft_id):
     """Throw a draft away."""
     _delete_draft(draft_id)
     return redirect(url_for("index"))
-
-
-_SERVICE_LABEL = {"plex": "Plex", "ytm": "YouTube Music"}
 
 
 def _port():

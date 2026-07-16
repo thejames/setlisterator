@@ -25,27 +25,22 @@
     <td>{{ e.get("matched", 0) }} added{% if e.get("missing") %}
         <span class="miss">· {{ e.get("missing") }} missing</span>{% endif %}</td>
     <td>
-      {% set editable = e.get("service", "plex") == "plex" and e.get("playlist_rating_key") %}
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         {% if e.get("source", "setlist") == "setlist" %}
         <form method="post" action="{{ url_for('builder_seed') }}" style="margin:0"
               data-loading="Matching…">
           <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
-          <input type="hidden" name="service" value="{{ e.get('service', 'plex') }}">
           <button type="submit" title="Match the show again into a new playlist">New from show</button>
         </form>
         {% endif %}
-        {% if editable %}
+        {% if e.get("playlist_rating_key") %}
         <form method="post" action="{{ url_for('builder_edit') }}" style="margin:0"
               data-loading="Opening…">
-          <input type="hidden" name="service" value="{{ e.get('service', 'plex') }}">
           <input type="hidden" name="playlist_id" value="{{ e.get('playlist_rating_key') }}">
           <button type="submit" title="Edit this playlist's tracks">Edit</button>
         </form>
-        <a href="{{ url_for('playlist_delete_confirm', service=e.get('service','plex'), id=e.get('playlist_rating_key'), name=e.get('playlist_name','')) }}"
+        <a href="{{ url_for('playlist_delete_confirm', id=e.get('playlist_rating_key'), name=e.get('playlist_name','')) }}"
            class="sub" style="color:var(--red)">Delete</a>
-        {% elif e.get("source") == "builder" %}
-        <span class="sub">built in {{ 'YouTube Music' if e.get('service') == 'ytm' else 'Plex' }}</span>
         {% endif %}
         {% if e.get("url") %}
         <a href="{{ e.url }}" target="_blank" rel="noopener">setlist.fm ↗</a>

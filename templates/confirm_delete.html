@@ -5,13 +5,12 @@
   <div class="big" style="margin-bottom:10px">Delete this playlist?</div>
   <p style="color:var(--muted);margin-bottom:6px">
     <span style="color:var(--text);font-weight:600">“{{ name or "this playlist" }}”</span>
-    will be permanently removed from {{ service_label }}.</p>
+    will be permanently removed from Plex.</p>
   <p class="hint" style="margin-bottom:24px">This can't be undone.</p>
   <div style="display:flex;gap:12px;justify-content:center">
     <a href="{{ url_for('history') }}"><button type="button" class="btn-ghost">Cancel</button></a>
     <form method="post" action="{{ url_for('playlist_delete') }}" style="margin:0"
           data-loading="Deleting…">
-      <input type="hidden" name="service" value="{{ service }}">
       <input type="hidden" name="id" value="{{ playlist_id }}">
       <button type="submit" class="btn-accent" style="background:var(--red);box-shadow:none">
         Delete permanently</button>
