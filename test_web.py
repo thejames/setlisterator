@@ -45,9 +45,11 @@ def _gather_result():
         "songs": [{"position": 1}, {"position": 2}, {"position": 3}],
         "matched": [
             {"rating_key": 10, "track_title": "Tommy the Cat",
-             "track_artist": "Primus", "album": "Sailing the Seas of Cheese"},
+             "track_artist": "Primus", "album": "Sailing the Seas of Cheese",
+             "tier": "exact", "source": "artist", "quality": 100},
             {"rating_key": 20, "track_title": "Jerry Was a Race Car Driver",
-             "track_artist": "Primus", "album": "Sailing the Seas of Cheese"}],
+             "track_artist": "Primus", "album": "Sailing the Seas of Cheese",
+             "tier": "loose", "source": "global", "quality": 80}],
         "missing": [(3, "Primus", "Jilly's on Smack", "Green Naugahyde")],
         "fuzzy": [],
     }
@@ -164,7 +166,7 @@ def test_history_empty(client, monkeypatch):
 
 # --- builder: seeding ------------------------------------------------------
 
-def test_seed_empty_creates_draft_and_redirects(client, drafts):
+def test_seed_empty_goes_straight_to_builder(client, drafts):
     resp = client.post("/builder/seed", data={"name": "Mix"})
     assert resp.status_code == 302
     assert len(drafts) == 1
@@ -172,10 +174,11 @@ def test_seed_empty_creates_draft_and_redirects(client, drafts):
     assert "service" not in draft                  # no service tag anywhere
     assert draft["name"] == "Mix"
     assert draft["tracks"] == []
-    assert f"/builder/{draft['id']}" in resp.headers["Location"]
+    # nothing to preview -> the builder, not the preview screen
+    assert resp.headers["Location"].endswith(f"/builder/{draft['id']}")
 
 
-def test_seed_from_setlist_populates_tracks(client, drafts, monkeypatch):
+def test_seed_from_setlist_populates_tracks_and_previews(client, drafts, monkeypatch):
     monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
     monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
     resp = client.post("/builder/seed",
@@ -184,6 +187,36 @@ def test_seed_from_setlist_populates_tracks(client, drafts, monkeypatch):
     draft = next(iter(drafts.values()))
     assert [t["track_id"] for t in draft["tracks"]] == ["10", "20"]
     assert draft["seed"]["missing_tracks"][0]["title"] == "Jilly's on Smack"
+    # a setlist seed opens the preview first
+    assert resp.headers["Location"].endswith(f"/builder/{draft['id']}/preview")
+
+
+# --- builder: preview ------------------------------------------------------
+
+def test_preview_shows_chips_and_quality_pills(client, drafts, monkeypatch):
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
+    client.post("/builder/seed", data={"setlist": "abc123"})
+    draft = next(iter(drafts.values()))
+    body = client.get(f"/builder/{draft['id']}/preview").data.decode()
+    assert "pill-exact" in body and "pill-fuzzy" in body   # both tiers shown
+    assert 'chip exact"><b>1</b>' in body                  # one exact match
+    assert 'chip fuzzy"><b>1</b>' in body                  # one fuzzy match
+    assert 'chip missing"><b>1</b>' in body                # one missing song
+    assert "Create now" in body
+    assert f"/builder/{draft['id']}" in body               # Edit-in-builder link
+
+
+def test_preview_without_seed_redirects_to_builder(client, drafts):
+    d = _seed(drafts)                                       # from-scratch, no seed
+    resp = client.get(f"/builder/{d['id']}/preview")
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith(f"/builder/{d['id']}")
+
+
+def test_preview_missing_draft_errors(client, drafts):
+    body = client.get("/builder/gone/preview").data.decode()
+    assert "Draft not found" in body
 
 
 def test_seed_setlist_error(client, drafts, monkeypatch):

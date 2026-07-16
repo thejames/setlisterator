@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Preview — Setlist-er-ator{% endblock %}
+{% block content %}
+
+{% if draft.seed %}
+<div class="meta" style="margin:0 0 6px">
+  <span class="lead">{{ draft.seed.artist }}</span>
+  {% if draft.seed.date %}<span class="sep">·</span>{{ draft.seed.date }}{% endif %}
+  {% if draft.seed.url %}<span class="sep">·</span>
+    <a href="{{ draft.seed.url }}" target="_blank" rel="noopener">setlist.fm ↗</a>{% endif %}
+</div>
+{% endif %}
+
+<input class="title-input" form="create-form" name="name" value="{{ draft.name }}"
+       aria-label="Playlist name" placeholder="Playlist name">
+
+<div class="chips">
+  <div class="chip exact"><b>{{ stats.exact }}</b><span>exact</span></div>
+  <div class="chip fuzzy"><b>{{ stats.fuzzy }}</b><span>fuzzy</span></div>
+  <div class="chip missing"><b>{{ stats.missing }}</b><span>missing</span></div>
+</div>
+
+{% if draft.tracks %}
+<div class="label">Matched in your library ({{ stats.matched }})</div>
+<div class="panel">
+  <table>
+    <tbody>
+      {% for t in draft.tracks %}
+      <tr>
+        <td class="num" style="width:34px">{{ loop.index }}</td>
+        <td>
+          <div class="trunc">{{ t.title or "(untitled)" }}</div>
+          <div class="sub trunc">{{ t.artist }}{% if t.album %} · {{ t.album }}{% endif %}</div>
+        </td>
+        <td style="text-align:right;width:90px">
+          {% if t.tier == "exact" %}
+          <span class="pill pill-exact">Exact</span>
+          {% else %}
+          <span class="pill pill-fuzzy" title="Matched loosely ({{ t.tier }}) — double-check this one">Fuzzy</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="hint">No songs from this setlist matched your library.</p>
+{% endif %}
+
+{% if draft.seed.missing_tracks %}
+<div class="section-head" style="margin-top:26px">
+  <span class="dot red"></span>
+  <span class="t">Not in your library ({{ draft.seed.missing_tracks|length }})</span>
+</div>
+<p class="hint">These setlist songs had no match. Create now to skip them, or Edit in
+  builder to search for another version.</p>
+<div class="cards">
+  {% for m in draft.seed.missing_tracks %}
+  <div class="card card-missing">
+    <span class="num">{{ m.position }}</span>
+    <span class="trunc">{{ m.artist }} — {{ m.title }}
+      {% if m.album %}<span class="sub">· {{ m.album }}</span>{% endif %}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="actionbar">
+  <div class="inner">
+    <span class="count"><b>{{ stats.matched }}</b>
+      <span>track{{ '' if stats.matched == 1 else 's' }} to add</span></span>
+    <span class="grow"></span>
+    <form method="post" style="margin:0"
+          action="{{ url_for('builder_discard', draft_id=draft.id) }}">
+      <button type="submit" class="btn-ghost">Discard</button>
+    </form>
+    <a href="{{ url_for('builder_open', draft_id=draft.id) }}">
+      <button type="button" class="btn-ghost">Edit in builder</button></a>
+    <form id="create-form" method="post"
+          action="{{ url_for('builder_save', draft_id=draft.id) }}"
+          data-loading="Creating…">
+      <button type="submit" class="btn-accent"{% if not draft.tracks %} disabled{% endif %}>
+        Create now</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

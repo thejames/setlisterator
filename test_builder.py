@@ -23,9 +23,11 @@ def _gather_result():
         "songs": [{"position": 1}, {"position": 2}, {"position": 3}],
         "matched": [
             {"rating_key": 10, "track_title": "Wilson",
-             "track_artist": "Phish", "album": "Junta"},
+             "track_artist": "Phish", "album": "Junta",
+             "tier": "exact", "source": "artist", "quality": 100},
             {"rating_key": 11, "track_title": "Tweezer",
-             "track_artist": "Phish", "album": "A Live One"}],
+             "track_artist": "Phish", "album": "A Live One",
+             "tier": "loose", "source": "global", "quality": 82}],
         "missing": [(3, "Phish", "Some Rarity", "Rift")],
         "fuzzy": [],
     }
@@ -46,6 +48,31 @@ def test_seed_from_setlist_maps_matches_and_seed(monkeypatch):
     assert draft["seed"]["missing_tracks"] == [
         {"position": 3, "artist": "Phish", "title": "Some Rarity",
          "album": "Rift"}]
+
+
+def test_seed_rows_carry_match_quality(monkeypatch):
+    """Rows keep tier/source/quality so the preview can flag fuzzy matches."""
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
+    rows = b.seed_from_setlist(_CONFIG, "abc123")["tracks"]
+    assert rows[0]["tier"] == "exact" and rows[0]["quality"] == 100
+    assert rows[1]["tier"] == "loose" and rows[1]["source"] == "global"
+
+
+def test_manual_track_has_no_quality_fields():
+    """A user-picked track carries no tier — it needs no quality signal."""
+    draft = b.empty_draft()
+    b.add_track(draft, {"track_id": 1, "title": "X"})
+    assert "tier" not in draft["tracks"][0]
+
+
+def test_preview_stats_counts_tiers_and_missing(monkeypatch):
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
+    draft = b.seed_from_setlist(_CONFIG, "abc123")   # 1 exact, 1 loose, 1 missing
+    b.add_track(draft, {"track_id": 99, "title": "Manual"})   # no tier
+    stats = b.preview_stats(draft)
+    assert stats == {"matched": 3, "exact": 1, "fuzzy": 1, "missing": 1}
 
 
 def test_empty_draft():

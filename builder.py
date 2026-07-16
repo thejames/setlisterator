@@ -23,9 +23,19 @@ def _track_row(track_id, title="", artist="", album=""):
 
 
 def _row_from_match(match):
-    """Map a gather_matches `matched` entry to a draft track row."""
-    return _track_row(match["rating_key"], match.get("track_title", ""),
-                      match.get("track_artist", ""), match.get("album", ""))
+    """Map a gather_matches `matched` entry to a draft track row.
+
+    Carries the match quality (``tier``/``source``/``quality``) so the preview
+    can flag fuzzy matches. Manually-added rows (``_track_row``) omit these —
+    a user-picked track needs no quality signal — and everything downstream
+    (materialize, edits) only reads ``track_id``, so the extra keys are inert.
+    """
+    row = _track_row(match["rating_key"], match.get("track_title", ""),
+                     match.get("track_artist", ""), match.get("album", ""))
+    row["tier"] = match.get("tier", "")
+    row["source"] = match.get("source", "")
+    row["quality"] = match.get("quality", 0)
+    return row
 
 
 def seed_from_setlist(config, setlist_arg, name=None, prefer_album=None):
@@ -55,6 +65,22 @@ def seed_from_setlist(config, setlist_arg, name=None, prefer_album=None):
 def empty_draft(name=""):
     """A fresh from-scratch draft."""
     return core.new_draft(name=name.strip() or "New playlist")
+
+
+def preview_stats(draft):
+    """Match-quality counts for the preview screen.
+
+    A row is *fuzzy* when it carries a tier other than ``exact`` (loose/medley/
+    prefix); manually-added rows have no tier and count as neither.
+    """
+    tracks = draft["tracks"]
+    return {
+        "matched": len(tracks),
+        "exact": sum(1 for t in tracks if t.get("tier") == "exact"),
+        "fuzzy": sum(1 for t in tracks
+                     if t.get("tier") not in ("exact", "", None)),
+        "missing": len((draft.get("seed") or {}).get("missing_tracks", [])),
+    }
 
 
 def add_track(draft, track):

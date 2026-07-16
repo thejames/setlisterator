@@ -176,7 +176,10 @@ def builder_seed():
         return _error("Plex problem", str(exc))
 
     _persist(draft)
-    return redirect(url_for("builder_open", draft_id=draft["id"]))
+    # A setlist seed opens the preview (review the matches, then Create or Edit);
+    # a from-scratch draft has nothing to preview, so go straight to the builder.
+    dest = "builder_preview" if draft.get("seed") else "builder_open"
+    return redirect(url_for(dest, draft_id=draft["id"]))
 
 
 @app.get("/builder/<draft_id>")
@@ -188,6 +191,20 @@ def builder_open(draft_id):
                       "That draft is gone (already saved, or discarded). "
                       "Start a new one.")
     return render_template("builder.html", draft=draft)
+
+
+@app.get("/builder/<draft_id>/preview")
+def builder_preview(draft_id):
+    """Review a setlist-seeded draft: matched tracks, quality, missing songs."""
+    draft = _load_draft(draft_id)
+    if draft is None:
+        return _error("Draft not found",
+                      "That draft is gone (already saved, or discarded). "
+                      "Start a new one.")
+    if not draft.get("seed"):
+        return redirect(url_for("builder_open", draft_id=draft_id))
+    return render_template("preview.html", draft=draft,
+                           stats=bld.preview_stats(draft))
 
 
 @app.get("/builder/<draft_id>/search")
