@@ -2,11 +2,11 @@
 
 [![tests](https://github.com/thejames/setlisterator/actions/workflows/tests.yml/badge.svg)](https://github.com/thejames/setlisterator/actions/workflows/tests.yml)
 
-Build music playlists on **Plex or YouTube Music** — seeded from a
+Build **Plex** music playlists — seeded from a
 [setlist.fm](https://www.setlist.fm/) show or assembled from scratch by
-searching — with a nicer builder than either service's own UI. For Plex it also
+searching — with a nicer builder than Plex's own UI. It also
 reports which songs are missing from your library so you know what to buy.
-Works as a command-line tool (`setlist_to_plex.py`, Plex-only) or a small local
+Works as a command-line tool (`setlist_to_plex.py`) or a small local
 [web app](#web-interface) (`web.py`, the full builder).
 
 ## Quickstart (macOS)
@@ -48,9 +48,8 @@ aren't documented here.)
    ./.venv/bin/python web.py
    ```
 
-   Open <http://127.0.0.1:5001>, pick a destination (Plex, or YouTube Music if
-   configured), optionally paste a setlist.fm URL to seed from, and hit **Open
-   builder**. Search your library/catalog to add tracks, drag to reorder, then
+   Open <http://127.0.0.1:5001>, optionally paste a setlist.fm URL to seed from,
+   and hit **Open builder**. Search your library to add tracks, drag to reorder, then
    **Save**. The **History** link in the navbar lists shows you've already made.
 
    Prefer the terminal? Use the CLI instead:
@@ -77,8 +76,6 @@ More detail on configuration, flags, and matching behavior is below.
 - **Python 3** — CLI + core matching pipeline (`setlist_to_plex.py`)
 - **[plexapi](https://github.com/pkkid/python-plexapi)** — Plex library search
   and playlist creation
-- **[ytmusicapi](https://github.com/sigma67/ytmusicapi)** — YouTube Music search
-  and playlist creation (unofficial; optional destination)
 - **[requests](https://requests.readthedocs.io/)** — setlist.fm REST API
 - **[python-dotenv](https://github.com/theskumar/python-dotenv)** — `.env` config
 - **[Flask](https://flask.palletsprojects.com/)** + Jinja templates — the local
@@ -98,7 +95,6 @@ Copy `.env.example` to `.env` and fill it in:
 | `PLEX_BASEURL`       | yes      | e.g. `http://localhost:32400`                    |
 | `PLEX_TOKEN`         | yes      | your Plex `X-Plex-Token`                          |
 | `PLEX_MUSIC_LIBRARY` | no       | library section name (default `Music`)           |
-| `YTM_OAUTH_FILE`     | no       | YouTube Music OAuth file (see [below](#youtube-music-optional)); enables the YTM destination |
 | `SETLIST_TO_PLEX_HISTORY` | no  | history file path (default below)                |
 | `SETLIST_TO_PLEX_DRAFTS` | no   | builder-draft file path (default beside history) |
 | `PORT`               | no       | web app port (default `5001`; web UI only)       |
@@ -177,36 +173,32 @@ still no build step) wraps the same matching pipeline:
 > Default port is **5001** (macOS uses 5000 for AirPlay Receiver). Override with
 > `PORT=8080 ./.venv/bin/python web.py`.
 
-On the landing page, choose a **destination** — **Plex** (your library) or
-**YouTube Music** (the streaming catalog; only offered when
-[configured](#youtube-music-optional)) — optionally paste a setlist URL or ID to
-**seed** from, name it if you like, and hit **Open builder**. Seeding matches
-the show against the chosen service and drops the best match for each song into
-the builder; leave the setlist blank to start from scratch.
+On the landing page, optionally paste a setlist URL or ID to **seed** from, name
+it if you like, and hit **Open builder**. Seeding matches the show against your
+Plex library and drops the best match for each song into the builder; leave the
+setlist blank to start from scratch.
 
-In the **builder** you assemble an ordered playlist: **search** the destination
-(your Plex library or the YTM catalog) and **+ Add** tracks, **drag** the ⠿
-handle to reorder, **✕** to remove, and edit the name up top. Your work is saved
+In the **builder** you assemble an ordered playlist: **search** your Plex
+library and **+ Add** tracks, **drag** the ⠿ handle to reorder, **✕** to remove,
+and edit the name up top. Your work is saved
 as a draft on every change, so a refresh or navigating away picks up where you
-left off. When it looks right, **Save** materializes it into a real playlist on
-that service. For a Plex, setlist-seeded playlist, a **Not in your library**
+left off. When it looks right, **Save** materializes it into a real Plex
+playlist. For a setlist-seeded playlist, a **Not in your library**
 panel lists the songs that had no match — search above to add another version,
 or note them for buying.
 
 The top navbar's **History** link lists every playlist you've made, newest
-first, tagged by service. A setlist-seeded row can **Re-open** the show in the
+first. A setlist-seeded row can **Re-open** the show in the
 builder (matching it fresh into a *new* playlist) or link to its setlist.fm
-source. A **Plex** playlist can also be **Edit**ed — it opens the live playlist
+source. A playlist can also be **Edit**ed — it opens the live playlist
 in the builder so you can add/remove/reorder its tracks or rename it, then **Save
 changes** applies just the differences (the playlist and its share link are kept)
-— or **Delete**d (with a confirmation; also drops the History entry). Editing and
-deleting are Plex-only for now (YouTube Music editing is deferred — see below).
+— or **Delete**d (with a confirmation; also drops the History entry).
 From-scratch playlists get a light entry (no setlist to re-open). The **Buy
 list** link aggregates every show's missing tracks into one deduped list,
 grouped by artist, with the album each is from — sourced from setlist.fm's "Songs
 on Albums" data with [MusicBrainz](https://musicbrainz.org/) as a fallback,
-looked up lazily and cached. Buy list and missing-reporting are **Plex-only**
-(YouTube Music's catalog effectively has everything).
+looked up lazily and cached.
 
 The **Attended** link turns your setlist.fm "I was there" history into a
 worklist. Enter a setlist.fm username (pre-filled from the optional
@@ -217,54 +209,8 @@ for a Plex playlist) instead. It reads public attended data, so any public
 username works.
 
 > **Local only.** The app talks to your local Plex server and holds your Plex
-> token (and YouTube Music OAuth), so it binds to `127.0.0.1` and has no
+> token, so it binds to `127.0.0.1` and has no
 > authentication. Don't expose it to a network.
-
-### YouTube Music (optional)
-
-YouTube Music has no official API, so auth means borrowing a logged-in browser
-session. The auth file defaults to `ytm_oauth.json` beside `history.json`
-(override with `YTM_OAUTH_FILE`).
-
-**One-click connect (recommended).** In the web app, when YouTube Music isn't
-set up yet, the landing page shows **Connect YouTube Music →**. It scans the
-browsers you're signed into, lists them **by Google account** (so you pick the
-right one across multiple profiles), and on pick reads that session's cookies
-directly — no header copying. macOS asks to use your keychain once (click
-Allow); Safari needs no prompt. Re-connect the same way whenever the session
-expires. (Needs the `browser_cookie3` package, included in `requirements.txt`.)
-
-The two manual methods below still work and auto-detect:
-
-**Browser auth (manual).** Copies request headers from a logged-in YouTube Music
-session:
-
-```bash
-mkdir -p ~/.config/setlist_to_plex
-./.venv/bin/ytmusicapi browser --file ~/.config/setlist_to_plex/ytm_oauth.json
-```
-
-It waits for you to paste request headers. To get them: open
-<https://music.youtube.com> (signed in) → DevTools → **Network** → filter for
-`/browse` → click a **POST** request to `…/youtubei/v1/browse…` → copy its
-**request headers** (Firefox: right-click → Copy Value → Copy Request Headers).
-Paste into the terminal, then press **Ctrl-D**. Restart the web app; YouTube
-Music is now selectable. No `.env` change needed.
-
-**OAuth (alternative — often rejected).** Uses a Google Cloud OAuth client
-("TVs and Limited Input devices"; enable the YouTube Data API, add yourself as a
-test user). Run `ytmusicapi oauth --client-id … --client-secret … --file
-<path>`, then put the **same** `YTM_CLIENT_ID` / `YTM_CLIENT_SECRET` in `.env`
-(needed at runtime to refresh the token). Note: YouTube frequently returns
-`HTTP 400` for requests made with self-created OAuth clients — if search/save
-fail that way, switch to browser auth above.
-
-If no valid auth file is present, YouTube Music is greyed out with a reason and
-everything works Plex-only. `ytmusicapi` is unofficial and the CLI stays
-Plex-only. **Editing/deleting** existing YouTube Music playlists is also deferred
-for now — ytmusicapi can't read an owned playlist's contents (a
-`twoColumnBrowseResultsRenderer` parse error), which the smart-diff edit needs;
-creating YTM playlists works fine.
 
 ## Deploy (self-host with Docker)
 
