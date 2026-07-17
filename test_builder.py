@@ -22,10 +22,10 @@ def _gather_result():
         "playlist_name": "Phish - MSG",
         "songs": [{"position": 1}, {"position": 2}, {"position": 3}],
         "matched": [
-            {"rating_key": 10, "track_title": "Wilson",
+            {"position": 1, "rating_key": 10, "track_title": "Wilson",
              "track_artist": "Phish", "album": "Junta",
              "tier": "exact", "source": "artist", "quality": 100},
-            {"rating_key": 11, "track_title": "Tweezer",
+            {"position": 2, "rating_key": 11, "track_title": "Tweezer",
              "track_artist": "Phish", "album": "A Live One",
              "tier": "loose", "source": "global", "quality": 82}],
         "missing": [(3, "Phish", "Some Rarity", "Rift")],
@@ -73,6 +73,26 @@ def test_preview_stats_counts_tiers_and_missing(monkeypatch):
     b.add_track(draft, {"track_id": 99, "title": "Manual"})   # no tier
     stats = b.preview_stats(draft)
     assert stats == {"matched": 3, "exact": 1, "fuzzy": 1, "missing": 1}
+
+
+def test_preview_rows_interleaves_missing_by_setlist_position(monkeypatch):
+    """A missing song appears at its slot, not lumped after the matches."""
+    result = {
+        "setlist_id": "abc123", "show": {"artist": "Phish"},
+        "playlist_name": "P", "songs": [{}, {}, {}],
+        "matched": [
+            {"position": 1, "rating_key": 10, "track_title": "Wilson",
+             "track_artist": "Phish", "album": "Junta", "tier": "exact"},
+            {"position": 3, "rating_key": 12, "track_title": "Cavern",
+             "track_artist": "Phish", "album": "Rift", "tier": "exact"}],
+        "missing": [(2, "Phish", "Icculus", "")],   # played 2nd, not in library
+        "fuzzy": [],
+    }
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: result)
+    rows = b.preview_rows(b.seed_from_setlist(_CONFIG, "abc123"))
+    assert [(r["position"], r["missing"], r["title"]) for r in rows] == [
+        (1, False, "Wilson"), (2, True, "Icculus"), (3, False, "Cavern")]
 
 
 def test_empty_draft():

@@ -35,6 +35,7 @@ def _row_from_match(match):
     row["tier"] = match.get("tier", "")
     row["source"] = match.get("source", "")
     row["quality"] = match.get("quality", 0)
+    row["position"] = match.get("position")   # setlist slot, for show-order preview
     return row
 
 
@@ -81,6 +82,30 @@ def preview_stats(draft):
                      if t.get("tier") not in ("exact", "", None)),
         "missing": len((draft.get("seed") or {}).get("missing_tracks", [])),
     }
+
+
+def preview_rows(draft):
+    """The setlist in play order — matched tracks and missing gaps interleaved.
+
+    One row per setlist song, ordered by its position in the show, so a missing
+    song shows where it was played rather than lumped after all the matches.
+    Matched rows carry ``tier`` for a quality pill; missing rows set
+    ``missing`` True. Rows without a position (shouldn't happen) sort last.
+    """
+    seed = draft.get("seed") or {}
+    rows = [
+        {"missing": False, "position": t.get("position"),
+         "title": t.get("title"), "artist": t.get("artist"),
+         "album": t.get("album"), "tier": t.get("tier", "")}
+        for t in draft["tracks"]
+    ] + [
+        {"missing": True, "position": m.get("position"),
+         "title": m.get("title"), "artist": m.get("artist"),
+         "album": m.get("album", "")}
+        for m in seed.get("missing_tracks", [])
+    ]
+    rows.sort(key=lambda r: (r["position"] is None, r["position"] or 0))
+    return rows
 
 
 def add_track(draft, track):

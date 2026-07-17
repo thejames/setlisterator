@@ -44,13 +44,14 @@ def _gather_result():
         "playlist_name": "Primus - TD Amp, Charlotte (2026-06-16)",
         "songs": [{"position": 1}, {"position": 2}, {"position": 3}],
         "matched": [
-            {"rating_key": 10, "track_title": "Tommy the Cat",
+            {"position": 1, "rating_key": 10, "track_title": "Tommy the Cat",
              "track_artist": "Primus", "album": "Sailing the Seas of Cheese",
              "tier": "exact", "source": "artist", "quality": 100},
-            {"rating_key": 20, "track_title": "Jerry Was a Race Car Driver",
+            {"position": 3, "rating_key": 20,
+             "track_title": "Jerry Was a Race Car Driver",
              "track_artist": "Primus", "album": "Sailing the Seas of Cheese",
              "tier": "loose", "source": "global", "quality": 80}],
-        "missing": [(3, "Primus", "Jilly's on Smack", "Green Naugahyde")],
+        "missing": [(2, "Primus", "Jilly's on Smack", "Green Naugahyde")],
         "fuzzy": [],
     }
 
@@ -205,6 +206,20 @@ def test_preview_shows_chips_and_quality_pills(client, drafts, monkeypatch):
     assert 'chip missing"><b>1</b>' in body                # one missing song
     assert "Create now" in body
     assert f"/builder/{draft['id']}" in body               # Edit-in-builder link
+
+
+def test_preview_shows_missing_song_inline_in_setlist_order(client, drafts, monkeypatch):
+    """The missing song (position 2) renders between the two matched tracks."""
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
+    client.post("/builder/seed", data={"setlist": "abc123"})
+    draft = next(iter(drafts.values()))
+    body = client.get(f"/builder/{draft['id']}/preview").data.decode()
+    assert "pill-missing" in body                          # missing shown as a row
+    i_tommy = body.index("Tommy the Cat")                  # position 1, matched
+    i_missing = body.index("Jilly&#39;s on Smack")         # position 2, missing
+    i_jerry = body.index("Jerry Was a Race Car Driver")    # position 3, matched
+    assert i_tommy < i_missing < i_jerry                   # inline, in show order
 
 
 def test_preview_without_seed_redirects_to_builder(client, drafts):

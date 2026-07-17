@@ -204,7 +204,8 @@ def builder_preview(draft_id):
     if not draft.get("seed"):
         return redirect(url_for("builder_open", draft_id=draft_id))
     return render_template("preview.html", draft=draft,
-                           stats=bld.preview_stats(draft))
+                           stats=bld.preview_stats(draft),
+                           rows=bld.preview_rows(draft))
 
 
 @app.get("/builder/<draft_id>/search")
