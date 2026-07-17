@@ -218,7 +218,16 @@
     .btn-ghost { background: transparent; border: none; color: var(--muted);
       font-weight: 600; }
     .btn-ghost:hover { color: var(--text); }
-    .btn-del:hover { color: var(--red); }
+    /* History row actions: text Re-open + icon buttons, kept on one line. */
+    .rowactions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .icon-btn { display: inline-flex; align-items: center; justify-content: center;
+      width: 34px; height: 34px; padding: 0; border-radius: 8px; text-decoration: none;
+      background: var(--panel3); border: 1px solid var(--border2);
+      color: var(--muted); cursor: pointer; }
+    .icon-btn:hover { border-color: #45454f; color: var(--text); }
+    .icon-btn svg { width: 17px; height: 17px; }
+    .icon-del { color: var(--red); }
+    .icon-del:hover { color: var(--red); border-color: var(--red); }
     .jsonview { max-width: 1180px; margin: 0 auto 90px; padding: 16px 18px;
       background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
       font-family: var(--mono); font-size: 12px; color: var(--text2);

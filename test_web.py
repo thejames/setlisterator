@@ -153,8 +153,9 @@ def test_history_shows_delete_only_with_rating_key(client, monkeypatch):
                   "processed_at": "2026-06-20"},
     })
     body = client.get("/history").data.decode()
-    assert "/playlist/delete?id=999" in body     # deletable row links to confirm
-    assert body.count(">Delete<") == 1           # keyless row has no Delete
+    assert "/playlist/delete?id=999" in body        # deletable row links to confirm
+    assert body.count("playlist/delete?id=") == 1   # keyless row has no Delete icon
+    assert 'aria-label="Delete playlist"' in body   # rendered as an icon button
 
 
 def test_delete_confirm_page_renders(client):
