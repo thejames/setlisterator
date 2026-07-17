@@ -1,0 +1,56 @@
+{# Show-order setlist rows + stat chips. Swapped whole on resolve/skip.
+   Each row can expand an inline library search to fill a gap or replace a match;
+   exact rows keep that search hidden until the "search every row" toggle. #}
+<div id="preview-rows">
+  <div class="chips">
+    <div class="chip exact"><b>{{ stats.exact }}</b><span>exact</span></div>
+    <div class="chip fuzzy"><b>{{ stats.fuzzy }}</b><span>fuzzy</span></div>
+    <div class="chip missing"><b>{{ stats.missing }}</b><span>missing</span></div>
+  </div>
+  <div class="panel">
+    <table class="tracktable">
+      <tbody>
+        {% for r in rows %}
+        <tr class="prow{% if r.missing %} missing{% elif r.tier == 'exact' and not r.manual %} exact{% endif %}">
+          <td class="num" style="width:34px">{{ r.position }}</td>
+          <td>
+            <div class="trunc">{{ r.title or "(untitled)" }}</div>
+            <div class="sub trunc">{{ r.artist }}{% if r.album %} · {{ r.album }}{% endif %}</div>
+          </td>
+          <td class="prow-actions">
+            {% if r.missing %}
+            <span class="pill pill-missing">Not in library</span>
+            {% elif r.manual %}
+            <span class="pill pill-added">Added</span>
+            {% elif r.tier == "exact" %}
+            <span class="pill pill-exact">Exact</span>
+            {% else %}
+            <span class="pill pill-fuzzy" title="Matched loosely ({{ r.tier }})">Fuzzy</span>
+            {% endif %}
+            <details class="rowsearch">
+              <summary class="rowsearch-btn" title="Search your library for this slot">🔍</summary>
+              <div class="rowsearch-panel">
+                <input class="searchbox" type="search" name="q" autocomplete="off"
+                       placeholder="Search Plex…"
+                       hx-get="{{ url_for('preview_search', draft_id=draft.id) }}"
+                       hx-vals='{"pos": "{{ r.position }}"}'
+                       hx-trigger="keyup changed delay:300ms, search"
+                       hx-target="#rsr-{{ r.position }}">
+                <div id="rsr-{{ r.position }}"></div>
+              </div>
+            </details>
+            {% if r.missing %}
+            <form hx-post="{{ url_for('preview_skip', draft_id=draft.id) }}"
+                  hx-target="#preview-rows" hx-swap="outerHTML" class="skipform">
+              <input type="hidden" name="pos" value="{{ r.position }}">
+              <button type="submit" class="btn-ghost btn-skip" title="Drop this song">Skip</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% if oob %}<b id="preview-count" hx-swap-oob="true">{{ stats.matched }}</b>{% endif %}

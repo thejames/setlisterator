@@ -1,5 +1,34 @@
 {% extends "base.html" %}
 {% block title %}Preview — Setlist-er-ator{% endblock %}
+{% block head %}
+<style>
+  .pill-added { color: var(--blue); background: #6E9BF01f; border: 1px solid #6E9BF03d; }
+  .prow-actions { text-align: right; white-space: nowrap; }
+  .prow-actions > * { vertical-align: middle; }
+  /* Per-row inline search: a zero-JS <details> whose panel drops below the row. */
+  .rowsearch { display: inline-block; margin-left: 8px; }
+  .rowsearch-btn { cursor: pointer; list-style: none; padding: 4px 8px;
+    border-radius: 6px; color: var(--muted); font-size: 13px; }
+  .rowsearch-btn::-webkit-details-marker { display: none; }
+  .rowsearch[open] .rowsearch-btn, .rowsearch-btn:hover { color: var(--blue);
+    background: #6E9BF01f; }
+  .rowsearch-panel { position: absolute; right: 18px; z-index: 60; margin-top: 8px;
+    width: 320px; max-width: 78vw; text-align: left;
+    background: #1B1B21; border: 1px solid var(--border2); border-radius: 10px;
+    box-shadow: 0 16px 40px rgba(0,0,0,.55); padding: 10px 12px; }
+  .rowsearch-panel .searchbox { max-width: none; margin: 0; }
+  /* the open row floats above later rows so its panel isn't clipped */
+  .tracktable td:has(.rowsearch[open]) { position: relative; z-index: 50; }
+  .btn-skip { margin-left: 6px; padding: 4px 10px; font-size: 13px; }
+  .btn-skip:hover { color: var(--red); }
+  /* Exact rows hide their search until the "search every row" toggle is on. */
+  tr.prow.exact .rowsearch { display: none; }
+  .previewwrap.show-all tr.prow.exact .rowsearch { display: inline-block; }
+  .allrows { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 14px;
+    font-size: 13px; color: var(--muted); font-weight: 500; cursor: pointer; }
+  .allrows input { width: 16px; height: 16px; margin: 0; }
+</style>
+{% endblock %}
 {% block content %}
 
 {% if draft.seed %}
@@ -14,46 +43,20 @@
 <input class="title-input" form="create-form" name="name" value="{{ draft.name }}"
        aria-label="Playlist name" placeholder="Playlist name">
 
-<div class="chips">
-  <div class="chip exact"><b>{{ stats.exact }}</b><span>exact</span></div>
-  <div class="chip fuzzy"><b>{{ stats.fuzzy }}</b><span>fuzzy</span></div>
-  <div class="chip missing"><b>{{ stats.missing }}</b><span>missing</span></div>
-</div>
+<label class="allrows">
+  <input type="checkbox"
+         onchange="document.getElementById('previewwrap').classList.toggle('show-all', this.checked)">
+  Search every row (not just gaps &amp; fuzzy matches)
+</label>
 
-<div class="label">Setlist ({{ rows|length }} songs)</div>
-<div class="panel">
-  <table>
-    <tbody>
-      {% for r in rows %}
-      <tr{% if r.missing %} class="missing"{% endif %}>
-        <td class="num" style="width:34px">{{ r.position }}</td>
-        <td>
-          <div class="trunc">{{ r.title or "(untitled)" }}</div>
-          <div class="sub trunc">{{ r.artist }}{% if r.album %} · {{ r.album }}{% endif %}</div>
-        </td>
-        <td style="text-align:right;width:118px">
-          {% if r.missing %}
-          <span class="pill pill-missing">Not in library</span>
-          {% elif r.tier == "exact" %}
-          <span class="pill pill-exact">Exact</span>
-          {% else %}
-          <span class="pill pill-fuzzy" title="Matched loosely ({{ r.tier }}) — double-check this one">Fuzzy</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="previewwrap" id="previewwrap">
+  {% include "_preview_rows.html" %}
 </div>
-{% if stats.missing %}
-<p class="hint" style="margin-top:12px">The {{ stats.missing }} greyed row{{ '' if stats.missing == 1 else 's' }}
-  aren't in your library — Create now skips them, or Edit in builder to search for another version.</p>
-{% endif %}
 
 <div class="actionbar">
   <div class="inner">
-    <span class="count"><b>{{ stats.matched }}</b>
-      <span>track{{ '' if stats.matched == 1 else 's' }} to add</span></span>
+    <span class="count"><b id="preview-count">{{ stats.matched }}</b>
+      <span>tracks to add</span></span>
     <span class="grow"></span>
     <form method="post" style="margin:0"
           action="{{ url_for('builder_discard', draft_id=draft.id) }}">
@@ -69,4 +72,10 @@
     </form>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/htmx.org@1.9.12"
+        integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2"
+        crossorigin="anonymous"></script>
 {% endblock %}

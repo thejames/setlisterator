@@ -222,6 +222,46 @@ def test_preview_shows_missing_song_inline_in_setlist_order(client, drafts, monk
     assert i_tommy < i_missing < i_jerry                   # inline, in show order
 
 
+def test_preview_search_returns_use_buttons(client, drafts, monkeypatch):
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
+    monkeypatch.setattr(bld, "search", lambda cfg, q: [
+        {"track_id": "99", "title": "Sub", "artist": "Primus", "album": "Y"}])
+    client.post("/builder/seed", data={"setlist": "abc123"})
+    d = next(iter(drafts.values()))
+    body = client.get(f"/builder/{d['id']}/preview/search?q=sub&pos=2").data.decode()
+    assert 'name="pos" value="2"' in body            # targets the right slot
+    assert 'name="track_id" value="99"' in body
+    assert ">Use<" in body
+
+
+def test_preview_resolve_fills_slot_and_reflows(client, drafts, monkeypatch):
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
+    client.post("/builder/seed", data={"setlist": "abc123"})
+    d = next(iter(drafts.values()))
+    body = client.post(f"/builder/{d['id']}/preview/resolve", data={
+        "pos": "2", "track_id": "99", "title": "Sub", "artist": "Primus",
+        "album": "Y"}).data.decode()
+    assert "pill-added" in body                       # slot 2 now an Added row
+    assert 'chip missing"><b>0</b>' in body           # the gap is resolved
+    draft = drafts[d["id"]]
+    assert draft["seed"]["missing_tracks"] == []
+    assert any(t.get("manual") for t in draft["tracks"])
+
+
+def test_preview_skip_drops_the_gap(client, drafts, monkeypatch):
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
+    client.post("/builder/seed", data={"setlist": "abc123"})
+    d = next(iter(drafts.values()))
+    body = client.post(f"/builder/{d['id']}/preview/skip",
+                       data={"pos": "2"}).data.decode()
+    assert 'chip missing"><b>0</b>' in body
+    assert "pill-missing" not in body                 # the gap is gone
+    assert drafts[d["id"]]["seed"]["missing_tracks"] == []
+
+
 def test_preview_without_seed_redirects_to_builder(client, drafts):
     d = _seed(drafts)                                       # from-scratch, no seed
     resp = client.get(f"/builder/{d['id']}/preview")

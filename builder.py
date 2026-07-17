@@ -96,7 +96,8 @@ def preview_rows(draft):
     rows = [
         {"missing": False, "position": t.get("position"),
          "title": t.get("title"), "artist": t.get("artist"),
-         "album": t.get("album"), "tier": t.get("tier", "")}
+         "album": t.get("album"), "tier": t.get("tier", ""),
+         "manual": t.get("manual", False)}
         for t in draft["tracks"]
     ] + [
         {"missing": True, "position": m.get("position"),
@@ -106,6 +107,39 @@ def preview_rows(draft):
     ]
     rows.sort(key=lambda r: (r["position"] is None, r["position"] or 0))
     return rows
+
+
+def set_slot(draft, position, track):
+    """Point a setlist slot at a chosen library track — fill a gap or replace a match.
+
+    Replaces the row already at ``position`` if there is one, otherwise adds a
+    new row there and clears the matching missing entry. Marked ``manual`` so the
+    preview shows an "Added" pill rather than a match-quality tier.
+    """
+    row = _track_row(track.get("track_id", ""), track.get("title", ""),
+                     track.get("artist", ""), track.get("album", ""))
+    row["position"] = position
+    row["manual"] = True
+    for i, t in enumerate(draft["tracks"]):
+        if t.get("position") == position:
+            draft["tracks"][i] = row
+            break
+    else:
+        draft["tracks"].append(row)
+    _drop_missing(draft, position)
+    _touch(draft)
+
+
+def skip_slot(draft, position):
+    """Drop a missing setlist song from the draft (and the buy-list record)."""
+    _drop_missing(draft, position)
+    _touch(draft)
+
+
+def _drop_missing(draft, position):
+    seed = draft.get("seed") or {}
+    seed["missing_tracks"] = [m for m in seed.get("missing_tracks", [])
+                              if m.get("position") != position]
 
 
 def add_track(draft, track):

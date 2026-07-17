@@ -52,6 +52,13 @@ def _tracklist(draft):
     return render_template("_tracklist.html", draft=draft, oob=True)
 
 
+def _preview_rows(draft):
+    """Render the interactive preview rows fragment (with an out-of-band count)."""
+    return render_template("_preview_rows.html", draft=draft, oob=True,
+                           stats=bld.preview_stats(draft),
+                           rows=bld.preview_rows(draft))
+
+
 @app.get("/")
 def index():
     try:
@@ -206,6 +213,63 @@ def builder_preview(draft_id):
     return render_template("preview.html", draft=draft,
                            stats=bld.preview_stats(draft),
                            rows=bld.preview_rows(draft))
+
+
+@app.get("/builder/<draft_id>/preview/search")
+def preview_search(draft_id):
+    """Search the library to fill or replace one setlist slot (row ``pos``)."""
+    draft = _load_draft(draft_id)
+    if draft is None:
+        return "", 404
+    pos = request.args.get("pos", "")
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return ""
+    try:
+        results = bld.search(core.load_config(), q)
+    except core.ConfigError as exc:
+        return f'<p class="hint">{exc}</p>', 200
+    except (PermissionError, ConnectionError, LookupError, core.PlexError) as exc:
+        return f'<p class="hint">Search failed: {exc}</p>', 200
+    except Exception as exc:  # any other backend hiccup
+        return f'<p class="hint">Search failed: {exc}</p>', 200
+    return render_template("_preview_search.html", results=results,
+                           draft=draft, pos=pos)
+
+
+@app.post("/builder/<draft_id>/preview/resolve")
+def preview_resolve(draft_id):
+    """Point setlist slot ``pos`` at a chosen track (fill a gap or replace a match)."""
+    draft = _load_draft(draft_id)
+    if draft is None:
+        return "", 404
+    try:
+        pos = int(request.form.get("pos", ""))
+    except ValueError:
+        return _preview_rows(draft)
+    bld.set_slot(draft, pos, {
+        "track_id": request.form.get("track_id", ""),
+        "title": request.form.get("title", ""),
+        "artist": request.form.get("artist", ""),
+        "album": request.form.get("album", ""),
+    })
+    _persist(draft)
+    return _preview_rows(draft)
+
+
+@app.post("/builder/<draft_id>/preview/skip")
+def preview_skip(draft_id):
+    """Drop a missing setlist song (slot ``pos``) from the draft."""
+    draft = _load_draft(draft_id)
+    if draft is None:
+        return "", 404
+    try:
+        pos = int(request.form.get("pos", ""))
+    except ValueError:
+        return _preview_rows(draft)
+    bld.skip_slot(draft, pos)
+    _persist(draft)
+    return _preview_rows(draft)
 
 
 @app.get("/builder/<draft_id>/search")

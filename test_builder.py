@@ -95,6 +95,41 @@ def test_preview_rows_interleaves_missing_by_setlist_position(monkeypatch):
         (1, False, "Wilson"), (2, True, "Icculus"), (3, False, "Cavern")]
 
 
+def test_set_slot_fills_a_missing_gap(monkeypatch):
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
+    draft = b.seed_from_setlist(_CONFIG, "abc123")   # matched 1,2 ; missing pos 3
+    b.set_slot(draft, 3, {"track_id": "99", "title": "Rarity Live",
+                          "artist": "Phish", "album": "Live"})
+    # the gap at position 3 is gone, and a manual row now sits there
+    assert draft["seed"]["missing_tracks"] == []
+    filled = [t for t in draft["tracks"] if t["position"] == 3][0]
+    assert filled["track_id"] == "99" and filled["manual"] is True
+    rows = b.preview_rows(draft)
+    assert [(r["position"], r["missing"]) for r in rows] == [
+        (1, False), (2, False), (3, False)]     # inline, in order, no gap
+
+
+def test_set_slot_replaces_an_existing_match(monkeypatch):
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
+    draft = b.seed_from_setlist(_CONFIG, "abc123")
+    b.set_slot(draft, 2, {"track_id": "77", "title": "Tweezer (better)",
+                          "artist": "Phish", "album": "X"})
+    row = [t for t in draft["tracks"] if t["position"] == 2][0]
+    assert row["track_id"] == "77" and row["manual"] is True
+    assert len(draft["tracks"]) == 2                # replaced, not appended
+
+
+def test_skip_slot_drops_the_missing_song(monkeypatch):
+    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
+    draft = b.seed_from_setlist(_CONFIG, "abc123")
+    b.skip_slot(draft, 3)
+    assert draft["seed"]["missing_tracks"] == []
+    assert all(not r["missing"] for r in b.preview_rows(draft))
+
+
 def test_empty_draft():
     draft = b.empty_draft(name="  Road Trip  ")
     assert "service" not in draft
