@@ -204,24 +204,63 @@ def parse_setlist_id(arg):
     return arg
 
 
+# setlist.fm throttles the free API hard, and a 429 is often transient — a
+# retry a second later usually succeeds. Back off a few times before giving up.
+_SFM_RATE_LIMIT_RETRIES = 3
+_SFM_RATE_LIMIT_BACKOFF = (1, 2, 4)   # seconds to wait before each retry
+
+
+def _retry_after_seconds(resp):
+    """Parse a Retry-After header (delta-seconds form) into a capped float, or None.
+
+    setlist.fm sends plain seconds; the HTTP-date form (or anything unparseable)
+    yields None so the caller falls back to its own backoff. Capped at 10s so a
+    bogus value can't hang the request.
+    """
+    raw = getattr(resp, "headers", {}).get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return min(max(0.0, float(raw)), 10.0)
+    except (TypeError, ValueError):
+        return None
+
+
 def _setlistfm_get(url, api_key, params=None, not_found="That was not found."):
     """GET a setlist.fm REST endpoint and return its parsed JSON.
 
     Centralizes auth, error mapping, and JSON parsing so every caller behaves
-    the same. Raises ConnectionError (unreachable), LookupError (404),
-    PermissionError (bad key), or RuntimeError (other non-200 / non-JSON).
+    the same. Retries a rate-limited (429) request a few times with backoff
+    (honoring Retry-After when present) before surfacing it. Raises
+    ConnectionError (unreachable), LookupError (404), PermissionError (bad key),
+    or RuntimeError (429 after retries, other non-200, or non-JSON).
     """
     headers = {"x-api-key": api_key, "Accept": "application/json"}
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=30)
-    except requests.exceptions.RequestException as exc:
-        raise ConnectionError(f"Could not reach setlist.fm: {exc}") from exc
+    resp = None
+    for attempt in range(_SFM_RATE_LIMIT_RETRIES + 1):
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=30)
+        except requests.exceptions.RequestException as exc:
+            raise ConnectionError(f"Could not reach setlist.fm: {exc}") from exc
+        if resp.status_code != 429 or attempt == _SFM_RATE_LIMIT_RETRIES:
+            break
+        wait = _retry_after_seconds(resp)
+        if wait is None:
+            wait = _SFM_RATE_LIMIT_BACKOFF[attempt]
+        logger.warning("setlist.fm rate-limited (429); retrying in %ss "
+                       "(attempt %d/%d).", wait, attempt + 1,
+                       _SFM_RATE_LIMIT_RETRIES)
+        time.sleep(wait)
 
     if resp.status_code == 404:
         raise LookupError(not_found)
     if resp.status_code in (401, 403):
         raise PermissionError(
             "setlist.fm rejected the API key (check SETLISTFM_API_KEY).")
+    if resp.status_code == 429:
+        raise RuntimeError(
+            "setlist.fm is rate-limiting requests (HTTP 429). "
+            "Wait a minute and try again.")
     if resp.status_code != 200:
         raise RuntimeError(
             f"setlist.fm returned HTTP {resp.status_code}: {resp.text[:200]}")

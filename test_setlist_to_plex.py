@@ -652,6 +652,47 @@ def test_fetch_album_map_fail_soft(monkeypatch):
     assert m.fetch_album_map("https://setlist.fm/x.html") == {}   # fail-soft
 
 
+# --- _setlistfm_get rate-limit (429) retry ---------------------------------
+
+class _RLResp:
+    """Fake response with a status code and an optional Retry-After header."""
+    def __init__(self, status=200, payload=None, retry_after=None):
+        self.status_code = status
+        self._payload = {"ok": True} if payload is None else payload
+        self.text = ""
+        self.headers = {} if retry_after is None else {"Retry-After": retry_after}
+
+    def json(self):
+        return self._payload
+
+
+def test_setlistfm_get_retries_then_succeeds(monkeypatch):
+    slept = []
+    monkeypatch.setattr(m.time, "sleep", lambda s: slept.append(s))
+    seq = [_RLResp(status=429), _RLResp(status=200, payload={"got": "it"})]
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: seq.pop(0))
+    assert m._setlistfm_get("http://x", "key") == {"got": "it"}
+    assert slept == [1]                    # one backoff, then the retry won
+
+
+def test_setlistfm_get_honors_retry_after(monkeypatch):
+    slept = []
+    monkeypatch.setattr(m.time, "sleep", lambda s: slept.append(s))
+    seq = [_RLResp(status=429, retry_after="5"), _RLResp(status=200)]
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: seq.pop(0))
+    m._setlistfm_get("http://x", "key")
+    assert slept == [5.0]                   # waited the header, not the default 1s
+
+
+def test_setlistfm_get_gives_up_after_retries(monkeypatch):
+    slept = []
+    monkeypatch.setattr(m.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: _RLResp(status=429))
+    with pytest.raises(RuntimeError, match="429"):
+        m._setlistfm_get("http://x", "key")
+    assert slept == [1, 2, 4]               # 3 retries, escalating backoff
+
+
 # --- fetch_attended (a user's "I was there" shows) -------------------------
 
 class _AttResp:
