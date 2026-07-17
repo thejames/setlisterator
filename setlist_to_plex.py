@@ -668,6 +668,21 @@ def save_history(path, history):
     _save_json_store(path, history)
 
 
+def _forget_history(playlist_id):
+    """Drop any history entry pointing at a (now-deleted) playlist id."""
+    hist_file = history_path()
+    history = load_history(hist_file)
+    keys = [k for k, e in history.items()
+            if str(e.get("playlist_rating_key")) == str(playlist_id)]
+    for k in keys:
+        del history[k]
+    if keys:
+        try:
+            save_history(hist_file, history)
+        except OSError as exc:
+            logger.warning("Could not write history (%s).", exc)
+
+
 def should_process(history, setlist_id, force, is_tty, prompt_fn=input):
     """Decide whether to process a setlist given prior history.
 
@@ -1220,6 +1235,29 @@ def add_to_playlist(config, rating_key, name, rating_keys, history_meta=None):
     _record_history(playlist.title, getattr(playlist, "ratingKey", None),
                     len(existing) + len(tracks), history_meta)
     return playlist.title, len(tracks)
+
+
+def delete_playlist(config, playlist_id):
+    """Delete a Plex playlist and drop its history entry; return its title.
+
+    If the playlist is already gone from Plex, its history entry is still
+    cleared (so Delete also clears a stale row) and "" is returned.
+    """
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    except (PermissionError, ConnectionError) as exc:
+        raise PlexError(str(exc)) from exc
+
+    playlist = find_playlist(plex, rating_key=playlist_id)
+    title = ""
+    if playlist is not None:
+        title = playlist.title
+        try:
+            playlist.delete()
+        except plex_exceptions.PlexApiException as exc:
+            raise PlexError(f"Failed to delete playlist: {exc}") from exc
+    _forget_history(playlist_id)
+    return title
 
 
 def backfill_history(config):

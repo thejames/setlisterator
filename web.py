@@ -19,7 +19,7 @@ network. It reuses the core pipeline from setlist_to_plex.py:
 import json
 import os
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 
 import setlist_to_plex as core
 
@@ -336,6 +336,32 @@ def update():
         return _error("Plex problem", str(exc))
 
     return render_template("updated.html", name=title, added=added)
+
+
+@app.get("/playlist/delete")
+def playlist_delete_confirm():
+    """Confirmation page before permanently deleting a playlist."""
+    playlist_id = (request.args.get("id") or "").strip()
+    if not playlist_id:
+        return _error("Nothing to delete", "No playlist was specified.", 400)
+    return render_template("confirm_delete.html", playlist_id=playlist_id,
+                           name=request.args.get("name", ""))
+
+
+@app.post("/playlist/delete")
+def playlist_delete():
+    """Delete the Plex playlist (and drop its history entry), then back to History."""
+    playlist_id = (request.form.get("id") or "").strip()
+    if not playlist_id:
+        return _error("Nothing to delete", "No playlist was specified.", 400)
+    try:
+        config = core.load_config()
+        core.delete_playlist(config, playlist_id)
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    except core.PlexError as exc:
+        return _error("Couldn't delete playlist", str(exc))
+    return redirect(url_for("history"))
 
 
 def _port():

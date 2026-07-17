@@ -34,6 +34,10 @@
         {% if e.get("url") %}
         <a href="{{ e.url }}" target="_blank" rel="noopener">setlist.fm ↗</a>
         {% endif %}
+        {% if e.get("playlist_rating_key") %}
+        <a href="{{ url_for('playlist_delete_confirm', id=e.playlist_rating_key, name=e.get('playlist_name', '')) }}"
+           class="btn-ghost btn-del">Delete</a>
+        {% endif %}
       </div>
     </td>
   </tr>

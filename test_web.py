@@ -143,6 +143,53 @@ def test_history_empty(client, monkeypatch):
     assert "No history yet" in body
 
 
+# --- delete flow -----------------------------------------------------------
+
+def test_history_shows_delete_only_with_rating_key(client, monkeypatch):
+    monkeypatch.setattr(core, "load_history", lambda path: {
+        "withkey": {"id": "withkey", "playlist_name": "Has Key",
+                    "playlist_rating_key": 999, "processed_at": "2026-06-23"},
+        "nokey": {"id": "nokey", "playlist_name": "No Key",
+                  "processed_at": "2026-06-20"},
+    })
+    body = client.get("/history").data.decode()
+    assert "/playlist/delete?id=999" in body     # deletable row links to confirm
+    assert body.count(">Delete<") == 1           # keyless row has no Delete
+
+
+def test_delete_confirm_page_renders(client):
+    body = client.get("/playlist/delete?id=999&name=Phish+MSG").data.decode()
+    assert "Delete this playlist?" in body
+    assert 'name="id" value="999"' in body
+    assert "Phish MSG" in body
+
+
+def test_delete_confirm_requires_id(client):
+    assert client.get("/playlist/delete").status_code == 400
+
+
+def test_delete_posts_to_core_and_redirects(client, monkeypatch):
+    called = {}
+    monkeypatch.setattr(core, "delete_playlist",
+                        lambda cfg, pid: called.setdefault("id", pid) or "Phish")
+    resp = client.post("/playlist/delete", data={"id": "999"})
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/history")
+    assert called["id"] == "999"
+
+
+def test_delete_requires_id(client):
+    assert client.post("/playlist/delete", data={}).status_code == 400
+
+
+def test_delete_surfaces_plex_error(client, monkeypatch):
+    def boom(cfg, pid):
+        raise core.PlexError("Plex down")
+    monkeypatch.setattr(core, "delete_playlist", boom)
+    body = client.post("/playlist/delete", data={"id": "999"}).data.decode()
+    assert "Plex down" in body
+
+
 # --- update flow -----------------------------------------------------------
 
 class _FakePL:

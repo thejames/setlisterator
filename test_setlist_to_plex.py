@@ -1030,9 +1030,13 @@ class _FakePlaylistObj:
         self._items = list(items)
         self.added = []
         self.summary = None
+        self.deleted = False
 
     def items(self):
         return list(self._items)
+
+    def delete(self):
+        self.deleted = True
 
     def addItems(self, tracks):
         self.added.extend(tracks)
@@ -1087,6 +1091,47 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     assert saved["abc123"]["service"] == "plex"             # backend tag defaults to Plex
     assert saved["abc123"]["missing_tracks"] == [
         {"artist": "Phish", "title": "Destiny Unbound"}]
+
+
+def test_delete_playlist_removes_from_plex_and_history(monkeypatch, tmp_path):
+    pl = _FakePlaylistObj("Phish - MSG", rating_key=999)
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
+    hist = tmp_path / "history.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.save_history(hist, {"abc123": {"id": "abc123", "playlist_name": "Phish - MSG",
+                                     "playlist_rating_key": 999}})
+
+    title = m.delete_playlist(_CONFIG, "999")
+
+    assert title == "Phish - MSG"
+    assert pl.deleted is True
+    assert m.load_history(hist) == {}          # its history entry is dropped
+
+
+def test_delete_playlist_already_gone_still_clears_history(monkeypatch, tmp_path):
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([]))
+    hist = tmp_path / "history.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.save_history(hist, {"abc123": {"id": "abc123", "playlist_rating_key": 999}})
+
+    title = m.delete_playlist(_CONFIG, "999")   # not found in Plex — no error
+
+    assert title == ""
+    assert m.load_history(hist) == {}           # stale row still cleared
+
+
+def test_delete_playlist_leaves_unrelated_history(monkeypatch, tmp_path):
+    pl = _FakePlaylistObj("Gone", rating_key=999)
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
+    hist = tmp_path / "history.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.save_history(hist, {
+        "gone": {"id": "gone", "playlist_rating_key": 999},
+        "keep": {"id": "keep", "playlist_rating_key": 111}})
+
+    m.delete_playlist(_CONFIG, "999")
+
+    assert set(m.load_history(hist)) == {"keep"}   # only the matching row dropped
 
 
 def test_playlist_summary_full_record():
