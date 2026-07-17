@@ -50,7 +50,6 @@ import os
 import re
 import sys
 import time
-import uuid
 from collections import namedtuple
 from datetime import datetime
 from pathlib import Path
@@ -669,47 +668,6 @@ def save_history(path, history):
     _save_json_store(path, history)
 
 
-def draft_path():
-    """Path to the JSON builder-draft store (override with SETLIST_TO_PLEX_DRAFTS).
-
-    Lives beside history.json so both share config-dir and XDG conventions.
-    """
-    override = os.environ.get("SETLIST_TO_PLEX_DRAFTS")
-    if override:
-        return Path(override)
-    return history_path().with_name("drafts.json")
-
-
-def load_drafts(path=None):
-    """Load the drafts dict (draft_id -> draft); tolerant of a missing file."""
-    return _load_json_store(path or draft_path())
-
-
-def save_drafts(drafts, path=None):
-    """Write the drafts dict atomically."""
-    _save_json_store(path or draft_path(), drafts)
-
-
-def new_draft(service, name="", seed=None):
-    """Build a fresh in-progress builder draft for the given service.
-
-    A draft is one service's playlist-in-progress: an ordered ``tracks`` list
-    plus optional ``seed`` metadata (from a setlist.fm show) so Save can record
-    history without re-matching. Not persisted here; the caller saves it.
-    """
-    now = datetime.now().isoformat(timespec="seconds")
-    return {
-        "id": uuid.uuid4().hex,
-        "service": service,
-        "name": name,
-        "created_at": now,
-        "updated_at": now,
-        "seed": seed,
-        "target_playlist_id": None,
-        "tracks": [],
-    }
-
-
 def should_process(history, setlist_id, force, is_tty, prompt_fn=input):
     """Decide whether to process a setlist given prior history.
 
@@ -1060,8 +1018,8 @@ def _record_history(playlist_name, playlist_rating_key, matched_count,
                     history_meta, service="plex"):
     """Write/merge the history entry for a created or updated playlist.
 
-    ``service`` tags which backend the playlist lives in ("plex"/"ytm"); older
-    entries without the key are read as "plex" for backward compatibility.
+    ``service`` tags which backend the playlist lives in (always "plex"); the
+    field is retained in the schema so older entries stay readable.
     """
     if not (history_meta and history_meta.get("id")):
         return
