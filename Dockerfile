@@ -7,16 +7,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
-# App code. The layout is flat, so every root .py module is app code; the glob
-# keeps a newly added module from silently missing the image (.dockerignore
-# drops test_*.py from the context).
-COPY *.py ./
+# App code.
+COPY setlist_to_plex.py web.py ./
 COPY templates/ templates/
 COPY static/ static/
-
-# Fail the build, not the container, if a module is missing from the image.
-# web imports the whole dependency chain and needs no env vars at import time.
-RUN python -c "import web"
 
 # Runs as root so it can write to a bind-mounted Unraid appdata share
 # (typically owned by nobody:users) — the standard Unraid container pattern.

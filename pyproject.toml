@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "setlisterator"
-version = "2026.7.0"
+version = "2026.6.0"
 description = "Create a Plex playlist from a setlist.fm show, and report what's missing — CLI + local web app"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,6 +16,7 @@ dependencies = [
     "requests>=2.31.0",
     "python-dotenv>=1.0.0",
     "flask>=3.0.0",
+    "ytmusicapi>=1.4.0",
 ]
 
 [project.optional-dependencies]
@@ -32,4 +33,4 @@ setlisterator-web = "web:main"
 # files. Install editable (`pip install -e .`) so Flask finds templates/static
 # in place.
 [tool.setuptools]
-py-modules = ["setlist_to_plex", "web", "builder"]
+py-modules = ["setlist_to_plex", "web", "ytm_service", "builder"]

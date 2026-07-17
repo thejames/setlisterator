@@ -7,7 +7,7 @@ import setlist_to_plex as core
 
 
 _CONFIG = {"api_key": "k", "plex_baseurl": "http://x", "plex_token": "t",
-           "music_library": "Music"}
+           "music_library": "Music", "ytm_oauth_path": "/tmp/o.json"}
 
 
 # ---------------------------------------------------------------------------
@@ -22,12 +22,10 @@ def _gather_result():
         "playlist_name": "Phish - MSG",
         "songs": [{"position": 1}, {"position": 2}, {"position": 3}],
         "matched": [
-            {"position": 1, "rating_key": 10, "track_title": "Wilson",
-             "track_artist": "Phish", "album": "Junta",
-             "tier": "exact", "source": "artist", "quality": 100},
-            {"position": 2, "rating_key": 11, "track_title": "Tweezer",
-             "track_artist": "Phish", "album": "A Live One",
-             "tier": "loose", "source": "global", "quality": 82}],
+            {"rating_key": 10, "track_title": "Wilson",
+             "track_artist": "Phish", "album": "Junta"},
+            {"rating_key": 11, "track_title": "Tweezer",
+             "track_artist": "Phish", "album": "A Live One"}],
         "missing": [(3, "Phish", "Some Rarity", "Rift")],
         "fuzzy": [],
     }
@@ -37,9 +35,9 @@ def test_seed_from_setlist_maps_matches_and_seed(monkeypatch):
     monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
     monkeypatch.setattr(core, "gather_matches",
                         lambda *a, **k: _gather_result())
-    draft = b.seed_from_setlist(_CONFIG, "abc123")
+    draft = b.seed_from_setlist(_CONFIG, "plex", "abc123")
 
-    assert "service" not in draft
+    assert draft["service"] == "plex"
     assert draft["name"] == "Phish - MSG"
     assert [t["track_id"] for t in draft["tracks"]] == ["10", "11"]
     assert draft["tracks"][0]["album"] == "Junta"
@@ -50,96 +48,29 @@ def test_seed_from_setlist_maps_matches_and_seed(monkeypatch):
          "album": "Rift"}]
 
 
-def test_seed_rows_carry_match_quality(monkeypatch):
-    """Rows keep tier/source/quality so the preview can flag fuzzy matches."""
+def test_seed_passes_service_through(monkeypatch):
+    seen = {}
     monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
-    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
-    rows = b.seed_from_setlist(_CONFIG, "abc123")["tracks"]
-    assert rows[0]["tier"] == "exact" and rows[0]["quality"] == 100
-    assert rows[1]["tier"] == "loose" and rows[1]["source"] == "global"
 
+    def fake_gather(config, sid, name=None, prefer_album=None, service=None):
+        seen["service"] = service
+        return _gather_result()
+    monkeypatch.setattr(core, "gather_matches", fake_gather)
 
-def test_manual_track_has_no_quality_fields():
-    """A user-picked track carries no tier — it needs no quality signal."""
-    draft = b.empty_draft()
-    b.add_track(draft, {"track_id": 1, "title": "X"})
-    assert "tier" not in draft["tracks"][0]
-
-
-def test_preview_stats_counts_tiers_and_missing(monkeypatch):
-    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
-    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
-    draft = b.seed_from_setlist(_CONFIG, "abc123")   # 1 exact, 1 loose, 1 missing
-    b.add_track(draft, {"track_id": 99, "title": "Manual"})   # no tier
-    stats = b.preview_stats(draft)
-    assert stats == {"matched": 3, "exact": 1, "fuzzy": 1, "missing": 1}
-
-
-def test_preview_rows_interleaves_missing_by_setlist_position(monkeypatch):
-    """A missing song appears at its slot, not lumped after the matches."""
-    result = {
-        "setlist_id": "abc123", "show": {"artist": "Phish"},
-        "playlist_name": "P", "songs": [{}, {}, {}],
-        "matched": [
-            {"position": 1, "rating_key": 10, "track_title": "Wilson",
-             "track_artist": "Phish", "album": "Junta", "tier": "exact"},
-            {"position": 3, "rating_key": 12, "track_title": "Cavern",
-             "track_artist": "Phish", "album": "Rift", "tier": "exact"}],
-        "missing": [(2, "Phish", "Icculus", "")],   # played 2nd, not in library
-        "fuzzy": [],
-    }
-    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
-    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: result)
-    rows = b.preview_rows(b.seed_from_setlist(_CONFIG, "abc123"))
-    assert [(r["position"], r["missing"], r["title"]) for r in rows] == [
-        (1, False, "Wilson"), (2, True, "Icculus"), (3, False, "Cavern")]
-
-
-def test_set_slot_fills_a_missing_gap(monkeypatch):
-    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
-    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
-    draft = b.seed_from_setlist(_CONFIG, "abc123")   # matched 1,2 ; missing pos 3
-    b.set_slot(draft, 3, {"track_id": "99", "title": "Rarity Live",
-                          "artist": "Phish", "album": "Live"})
-    # the gap at position 3 is gone, and a manual row now sits there
-    assert draft["seed"]["missing_tracks"] == []
-    filled = [t for t in draft["tracks"] if t["position"] == 3][0]
-    assert filled["track_id"] == "99" and filled["manual"] is True
-    rows = b.preview_rows(draft)
-    assert [(r["position"], r["missing"]) for r in rows] == [
-        (1, False), (2, False), (3, False)]     # inline, in order, no gap
-
-
-def test_set_slot_replaces_an_existing_match(monkeypatch):
-    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
-    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
-    draft = b.seed_from_setlist(_CONFIG, "abc123")
-    b.set_slot(draft, 2, {"track_id": "77", "title": "Tweezer (better)",
-                          "artist": "Phish", "album": "X"})
-    row = [t for t in draft["tracks"] if t["position"] == 2][0]
-    assert row["track_id"] == "77" and row["manual"] is True
-    assert len(draft["tracks"]) == 2                # replaced, not appended
-
-
-def test_skip_slot_drops_the_missing_song(monkeypatch):
-    monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
-    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
-    draft = b.seed_from_setlist(_CONFIG, "abc123")
-    b.skip_slot(draft, 3)
-    assert draft["seed"]["missing_tracks"] == []
-    assert all(not r["missing"] for r in b.preview_rows(draft))
+    b.seed_from_setlist(_CONFIG, "ytm", "abc123")
+    assert seen["service"].name == "ytm"
 
 
 def test_empty_draft():
-    draft = b.empty_draft(name="  Road Trip  ")
-    assert "service" not in draft
+    draft = b.empty_draft("ytm", name="  Road Trip  ")
+    assert draft["service"] == "ytm"
     assert draft["name"] == "Road Trip"
     assert draft["tracks"] == []
     assert draft["seed"] is None
 
 
 def test_empty_draft_default_name():
-    assert b.empty_draft()["name"] == "New playlist"
+    assert b.empty_draft("plex")["name"] == "New playlist"
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +78,7 @@ def test_empty_draft_default_name():
 # ---------------------------------------------------------------------------
 
 def test_add_track():
-    draft = b.empty_draft()
+    draft = b.empty_draft("plex")
     b.add_track(draft, {"track_id": 10, "title": "Wilson",
                         "artist": "Phish", "album": "Junta"})
     assert draft["tracks"] == [
@@ -156,7 +87,7 @@ def test_add_track():
 
 
 def test_remove_track():
-    draft = b.empty_draft()
+    draft = b.empty_draft("plex")
     for i in range(3):
         b.add_track(draft, {"track_id": i, "title": f"T{i}"})
     b.remove_track(draft, 1)
@@ -164,14 +95,14 @@ def test_remove_track():
 
 
 def test_remove_track_out_of_range_is_noop():
-    draft = b.empty_draft()
+    draft = b.empty_draft("plex")
     b.add_track(draft, {"track_id": 1})
     b.remove_track(draft, 5)
     assert len(draft["tracks"]) == 1
 
 
 def test_reorder_tracks():
-    draft = b.empty_draft()
+    draft = b.empty_draft("plex")
     for i in range(3):
         b.add_track(draft, {"track_id": i})
     b.reorder_tracks(draft, [2, 0, 1])
@@ -179,7 +110,7 @@ def test_reorder_tracks():
 
 
 def test_reorder_ignores_malformed_permutation():
-    draft = b.empty_draft()
+    draft = b.empty_draft("plex")
     for i in range(3):
         b.add_track(draft, {"track_id": i})
     b.reorder_tracks(draft, [0, 1])          # too short — drops a track if applied
@@ -189,7 +120,7 @@ def test_reorder_ignores_malformed_permutation():
 
 
 # ---------------------------------------------------------------------------
-# search
+# search dispatch (one path serves both services via the section shim)
 # ---------------------------------------------------------------------------
 
 class _FakeTrack:
@@ -206,11 +137,17 @@ class _FakeSection:
 
 
 def test_search_maps_tracks(monkeypatch):
-    monkeypatch.setattr(core, "connect_plex_section",
-                        lambda cfg: (object(), _FakeSection()))
-    rows = b.search(_CONFIG, "wilson")
+    monkeypatch.setattr(b, "service_for", lambda name: _FakeServiceStub())
+    rows = b.search(_CONFIG, "plex", "wilson")
     assert rows == [{"track_id": "42", "title": "Wilson",
                      "artist": "Phish", "album": "Junta"}]
+
+
+class _FakeServiceStub:
+    name = "plex"
+
+    def connect(self, config):
+        return object(), _FakeSection()
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +163,7 @@ def test_materialize_plex_dispatches_to_create_playlist(monkeypatch):
         return name
     monkeypatch.setattr(core, "create_playlist", fake_create)
 
-    draft = b.empty_draft(name="Mix")
+    draft = b.empty_draft("plex", name="Mix")
     b.add_track(draft, {"track_id": 10})
     b.add_track(draft, {"track_id": 11})
     name = b.materialize(_CONFIG, draft)
@@ -237,54 +174,28 @@ def test_materialize_plex_dispatches_to_create_playlist(monkeypatch):
     assert calls["meta"]["id"] == f"builder-{draft['id']}"
 
 
+def test_materialize_ytm_dispatches_to_ytm(monkeypatch):
+    import ytm_service as ytm
+    calls = {}
+
+    def fake_create(config, name, ids, meta):
+        calls["ids"] = ids
+        return name
+    monkeypatch.setattr(ytm, "create_playlist_ytm", fake_create)
+
+    draft = b.empty_draft("ytm", name="YT Mix")
+    b.add_track(draft, {"track_id": "v1"})
+    name = b.materialize(_CONFIG, draft)
+
+    assert name == "YT Mix"
+    assert calls["ids"] == ["v1"]
+
+
 def test_history_meta_setlist_source(monkeypatch):
     monkeypatch.setattr(core, "parse_setlist_id", lambda s: "abc123")
     monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _gather_result())
-    draft = b.seed_from_setlist(_CONFIG, "abc123")
+    draft = b.seed_from_setlist(_CONFIG, "plex", "abc123")
     meta = b._history_meta(draft)
     assert meta["source"] == "setlist"
     assert meta["id"] == "abc123"
     assert meta["missing"] == 1
-
-
-# ---------------------------------------------------------------------------
-# editing an existing playlist
-# ---------------------------------------------------------------------------
-
-def test_draft_from_playlist_builds_edit_draft(monkeypatch):
-    monkeypatch.setattr(core, "open_playlist", lambda cfg, pid: {
-        "name": "My Mix",
-        "tracks": [{"track_id": "10", "item_id": "i1", "title": "A",
-                    "artist": "Phish", "album": "Junta"}]})
-    draft = b.draft_from_playlist(_CONFIG, "500")
-    assert "service" not in draft
-    assert draft["name"] == "My Mix"
-    assert draft["target_playlist_id"] == "500"
-    assert draft["seed"] is None
-    assert draft["tracks"][0]["item_id"] == "i1"
-
-
-def test_apply_edits_dispatches_to_plex(monkeypatch):
-    seen = {}
-    monkeypatch.setattr(core, "apply_playlist_edits",
-                        lambda cfg, pid, name, rows: seen.update(
-                            pid=pid, name=name, rows=rows) or ("New", {"added": 1}))
-    draft = core.new_draft(name="New")
-    draft["target_playlist_id"] = "500"
-    draft["tracks"] = [{"track_id": "10", "item_id": "i1"}, {"track_id": "20"}]
-    name, stats = b.apply_edits(_CONFIG, draft)
-    assert name == "New" and stats == {"added": 1}
-    assert seen["pid"] == "500"
-    assert seen["rows"] == draft["tracks"]
-
-
-def test_apply_edits_without_target_raises():
-    draft = core.new_draft(name="x")   # target_playlist_id is None
-    with pytest.raises(ValueError):
-        b.apply_edits(_CONFIG, draft)
-
-
-def test_delete_playlist_dispatches(monkeypatch):
-    monkeypatch.setattr(core, "delete_playlist", lambda cfg, pid: f"deleted-{pid}")
-    assert b.delete_playlist(_CONFIG, "500") == "deleted-500"
-

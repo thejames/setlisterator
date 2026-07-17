@@ -24,4 +24,4 @@ def test_project_name_and_modules():
     data = _pyproject()
     assert data["project"]["name"] == "setlisterator"
     assert set(data["tool"]["setuptools"]["py-modules"]) == {
-        "setlist_to_plex", "web", "builder"}
+        "setlist_to_plex", "web", "ytm_service", "builder"}

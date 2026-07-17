@@ -2,12 +2,10 @@
 
 [![tests](https://github.com/thejames/setlisterator/actions/workflows/tests.yml/badge.svg)](https://github.com/thejames/setlisterator/actions/workflows/tests.yml)
 
-Build **Plex** music playlists — seeded from a
-[setlist.fm](https://www.setlist.fm/) show or assembled from scratch by
-searching — with a nicer builder than Plex's own UI. It also
-reports which songs are missing from your library so you know what to buy.
+Create a Plex music playlist from a [setlist.fm](https://www.setlist.fm/) show,
+and report which songs are missing from your library so you know what to buy.
 Works as a command-line tool (`setlist_to_plex.py`) or a small local
-[web app](#web-interface) (`web.py`, the full builder).
+[web app](#web-interface) (`web.py`).
 
 ## Quickstart (macOS)
 
@@ -48,9 +46,9 @@ aren't documented here.)
    ./.venv/bin/python web.py
    ```
 
-   Open <http://127.0.0.1:5001>, optionally paste a setlist.fm URL to seed from,
-   and hit **Open builder**. Search your library to add tracks, drag to reorder, then
-   **Save**. The **History** link in the navbar lists shows you've already made.
+   Open <http://127.0.0.1:5001>, paste a setlist.fm URL, hit **Preview**, pick
+   track versions where you're offered a choice, then **Create playlist**. The
+   **History** link in the navbar lists shows you've already made.
 
    Prefer the terminal? Use the CLI instead:
 
@@ -96,7 +94,6 @@ Copy `.env.example` to `.env` and fill it in:
 | `PLEX_TOKEN`         | yes      | your Plex `X-Plex-Token`                          |
 | `PLEX_MUSIC_LIBRARY` | no       | library section name (default `Music`)           |
 | `SETLIST_TO_PLEX_HISTORY` | no  | history file path (default below)                |
-| `SETLIST_TO_PLEX_DRAFTS` | no   | builder-draft file path (default beside history) |
 | `PORT`               | no       | web app port (default `5001`; web UI only)       |
 
 ## Usage
@@ -173,44 +170,52 @@ still no build step) wraps the same matching pipeline:
 > Default port is **5001** (macOS uses 5000 for AirPlay Receiver). Override with
 > `PORT=8080 ./.venv/bin/python web.py`.
 
-On the landing page, optionally paste a setlist URL or ID to **seed** from, name
-it if you like, and hit **Open builder**. Seeding matches the show against your
-Plex library and drops the best match for each song into the builder; leave the
-setlist blank to start from scratch.
+Paste a setlist URL or ID and hit **Preview** — it matches the show against
+your library and shows the **full setlist in order** *without* creating
+anything; songs not in your library are flagged inline (and also listed
+separately below). When a song matches more than one library track (e.g. the
+same song on a studio album, a live record, and a compilation) its row shows a
+**dropdown** so you can pick the version — by album — you want; the best match
+is preselected. Review it (and tweak the playlist name if you like), then click
+**Create playlist** to commit. Create rebuilds the chosen tracks by their Plex
+rating keys, so nothing is re-matched, and the run is recorded in the same
+[history](#processed-setlist-history) the CLI uses.
 
-In the **builder** you assemble an ordered playlist: **search** your Plex
-library and **+ Add** tracks, **drag** the ⠿ handle to reorder, **✕** to remove,
-and edit the name up top. Your work is saved
-as a draft on every change, so a refresh or navigating away picks up where you
-left off. When it looks right, **Save** materializes it into a real Plex
-playlist. For a setlist-seeded playlist, a **Not in your library**
-panel lists the songs that had no match — search above to add another version,
-or note them for buying.
+The preview table has a few extra handles. A **magnifier** next to each match
+lets you search your library by hand and re-point the row when none of the
+auto-matches are right. Clicking the **Exact/Fuzzy pill** opens a popover
+explaining *how* the row matched — the title tier (exact, close, medley,
+prefix) and whether it came from the artist's own tracks or a library-wide
+search. The summary **chips** above the table double as filters: click one
+(exact, fuzzy, multi-match, missing) to flash and highlight those rows, then
+click it again — or the **songs** total — to clear. The source **URL bar**
+links out to the show on setlist.fm in a new tab.
 
-The top navbar's **History** link lists every playlist you've made, newest
-first. A setlist-seeded row can **Re-open** the show in the
-builder (matching it fresh into a *new* playlist) or link to its setlist.fm
-source. A playlist can also be **Edit**ed — it opens the live playlist
-in the builder so you can add/remove/reorder its tracks or rename it, then **Save
-changes** applies just the differences (the playlist and its share link are kept)
-— or **Delete**d (with a confirmation; also drops the History entry).
-From-scratch playlists get a light entry (no setlist to re-open). The **Buy
-list** link aggregates every show's missing tracks into one deduped list,
-grouped by artist, with the album each is from — sourced from setlist.fm's "Songs
-on Albums" data with [MusicBrainz](https://musicbrainz.org/) as a fallback,
-looked up lazily and cached.
+The top navbar's **History** link opens a page listing every show you've
+created, newest first. Each row can **Re-open** the setlist in Preview, link out
+to its setlist.fm source, or **Update** the existing playlist: it re-matches the
+show against your *current* library and shows the tracks that are now available
+but not yet in the playlist, for you to confirm. Update is **add-only** — it
+tops up the existing playlist (no new copy, nothing removed), so when you buy a
+song that was missing, you can fold it into the playlist you already made. The
+**Buy list** link aggregates every show's missing tracks into one deduped list,
+grouped by artist, with the album each track is from. Albums come from
+setlist.fm's own "Songs on Albums" data (scraped from the setlist page when you
+preview a show), with [MusicBrainz](https://musicbrainz.org/) as a fallback for
+the few it doesn't map (e.g. covers) — looked up lazily on first Buy-list view
+and cached into history. Both are best-effort and degrade gracefully offline.
 
 The **Attended** link turns your setlist.fm "I was there" history into a
 worklist. Enter a setlist.fm username (pre-filled from the optional
 `SETLISTFM_USER` in your `.env`) and it lists every show you've marked attended,
-newest first. Each row has a **Build** button that opens it in the builder;
-shows you've already made are flagged `created ✓` with **Re-open** (and **Edit**
-for a Plex playlist) instead. It reads public attended data, so any public
+newest first. Each row has a **Preview** button that drops into the normal
+match → create flow; shows you've already made are flagged `created ✓` with
+**Re-open** / **Update** instead. It reads public attended data, so any public
 username works.
 
 > **Local only.** The app talks to your local Plex server and holds your Plex
-> token, so it binds to `127.0.0.1` and has no
-> authentication. Don't expose it to a network.
+> token, so it binds to `127.0.0.1` and has no authentication. Don't expose it
+> to a network.
 
 ## Deploy (self-host with Docker)
 

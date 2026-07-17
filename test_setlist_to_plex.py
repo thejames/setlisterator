@@ -435,8 +435,8 @@ def test_drafts_save_then_load_round_trip(tmp_path):
 
 
 def test_new_draft_shape():
-    draft = m.new_draft(name="Mix", seed={"setlist_id": "abc"})
-    assert "service" not in draft
+    draft = m.new_draft("ytm", name="Mix", seed={"setlist_id": "abc"})
+    assert draft["service"] == "ytm"
     assert draft["name"] == "Mix"
     assert draft["seed"] == {"setlist_id": "abc"}
     assert draft["tracks"] == []
@@ -446,7 +446,7 @@ def test_new_draft_shape():
 
 
 def test_new_draft_ids_are_unique():
-    assert m.new_draft()["id"] != m.new_draft()["id"]
+    assert m.new_draft("plex")["id"] != m.new_draft("plex")["id"]
 
 
 def test_should_process_new_id():
@@ -907,17 +907,48 @@ def test_gather_matches_builds_structure(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Plex connection helper
+# service seam (Phase 1): gather_matches targets a pluggable MusicService
 # ---------------------------------------------------------------------------
 
-def test_connect_plex_section_uses_module_functions(monkeypatch):
-    """Calls connect_plex/get_music_section by name, so tests can patch them."""
+class _FakeService:
+    """Minimal MusicService: connect() hands back a (client, section) pair."""
+
+    def __init__(self, section, name="fake"):
+        self.name = name
+        self._section = section
+        self.connected_with = None
+
+    def connect(self, config):
+        self.connected_with = config
+        return object(), self._section
+
+
+def test_gather_matches_tags_service_default_plex(monkeypatch):
+    _wire_gather(monkeypatch, [_FakeTrack("Wilson", "Phish", rating_key=10)])
+    result = m.gather_matches(_CONFIG, "abc123")
+    assert result["service"] == "plex"
+
+
+def test_gather_matches_uses_injected_service(monkeypatch):
+    monkeypatch.setattr(m, "fetch_setlist", lambda sid, key: _gather_setlist_data())
+    monkeypatch.setattr(m, "fetch_album_map", lambda url: {})
+    section = _FakeSection(artists=[
+        _FakeArtist("Phish", [_FakeTrack("Wilson", "Phish", rating_key=10)])])
+    svc = _FakeService(section)
+    result = m.gather_matches(_CONFIG, "abc123", service=svc)
+    assert result["service"] == "fake"
+    assert svc.connected_with is _CONFIG            # the service did the connecting
+    assert result["matched"][0]["rating_key"] == 10  # matcher ran against its section
+
+
+def test_plex_service_connect_uses_module_functions(monkeypatch):
     sentinel_client, sentinel_section = object(), object()
     monkeypatch.setattr(m, "connect_plex", lambda u, t: sentinel_client)
     monkeypatch.setattr(m, "get_music_section", lambda plex, lib: sentinel_section)
-    client, section = m.connect_plex_section(_CONFIG)
+    client, section = m.PLEX_SERVICE.connect(_CONFIG)
     assert client is sentinel_client
     assert section is sentinel_section
+    assert m.PLEX_SERVICE.name == "plex"
 
 
 def test_gather_matches_attaches_multiple_candidates(monkeypatch):
@@ -1095,25 +1126,9 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     assert saved["abc123"]["playlist_name"] == "Phish - MSG"
     assert saved["abc123"]["matched"] == 2
     assert saved["abc123"]["playlist_rating_key"] == 999   # key stored for update
-    assert "service" not in saved["abc123"]                 # no service tag anywhere
+    assert saved["abc123"]["service"] == "plex"             # backend tag defaults to Plex
     assert saved["abc123"]["missing_tracks"] == [
         {"artist": "Phish", "title": "Destiny Unbound"}]
-
-
-def test_playlist_summary_builder_source_is_plain():
-    # A from-scratch (source="builder") playlist has no show — no "full run",
-    # no "of N songs", no missing section.
-    summary = m._playlist_summary(
-        {"source": "builder", "song_count": 3, "missing_tracks": []},
-        added_count=3, track_count=3)
-    assert summary.splitlines() == [
-        "3 tracks.",
-        "",
-        "Created by Setlist-er-ator. 🤘",
-    ]
-    assert "full run" not in summary
-    one = m._playlist_summary({"source": "builder"}, added_count=1, track_count=1)
-    assert one.startswith("1 track.")   # singular
 
 
 def test_playlist_summary_full_record():
@@ -1271,142 +1286,3 @@ def test_add_to_playlist_missing_playlist_raises(monkeypatch):
     monkeypatch.setattr(m, "connect_plex", lambda u, t: plex)
     with pytest.raises(m.PlexError):
         m.add_to_playlist(_CONFIG, 999, "Gone", ["10"])
-
-
-# ---------------------------------------------------------------------------
-# editing an existing Plex playlist (open / apply diff / delete)
-# ---------------------------------------------------------------------------
-
-class _FakePLItem:
-    """A track as it sits inside a playlist: rating key + membership id."""
-
-    def __init__(self, rating_key, item_id, title=None, artist="Phish", album="A"):
-        self.ratingKey = rating_key
-        self.playlistItemID = item_id
-        self.title = title or f"track-{rating_key}"
-        self.grandparentTitle = artist
-        self.originalTitle = None
-        self.parentTitle = album
-
-
-class _FakeEditablePlaylist:
-    def __init__(self, title, rating_key, items=()):
-        self.title = title
-        self.ratingKey = rating_key
-        self.type = "playlist"
-        self._items = list(items)
-        self.deleted = False
-        self._next_id = 1000
-
-    def items(self):
-        return list(self._items)
-
-    def addItems(self, tracks):
-        for t in tracks:                              # library tracks → new items
-            self._items.append(_FakePLItem(
-                t.ratingKey, f"n{self._next_id}", t.title,
-                t.grandparentTitle, t.parentTitle))
-            self._next_id += 1
-
-    def removeItems(self, items):
-        ids = {i.playlistItemID for i in items}
-        self._items = [i for i in self._items if i.playlistItemID not in ids]
-
-    def moveItem(self, item, after=None):
-        self._items.remove(item)
-        if after is None:
-            self._items.insert(0, item)
-        else:
-            self._items.insert(self._items.index(after) + 1, item)
-
-    def editTitle(self, title, locked=True):
-        self.title = title
-
-    def delete(self):
-        self.deleted = True
-
-
-def _edit_plex(monkeypatch, tmp_path, items):
-    pl = _FakeEditablePlaylist("My Mix", 500, items=items)
-    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex(playlists=[pl]))
-    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "h.json")
-    return pl
-
-
-def test_open_playlist_returns_ordered_rows(monkeypatch, tmp_path):
-    _edit_plex(monkeypatch, tmp_path,
-               [_FakePLItem(10, "i1", "A"), _FakePLItem(11, "i2", "B")])
-    result = m.open_playlist(_CONFIG, "500")
-    assert result["name"] == "My Mix"
-    assert [(r["track_id"], r["item_id"], r["title"]) for r in result["tracks"]] == [
-        ("10", "i1", "A"), ("11", "i2", "B")]
-
-
-def test_open_playlist_missing_raises(monkeypatch):
-    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex(playlists=[]))
-    with pytest.raises(m.PlexError):
-        m.open_playlist(_CONFIG, "500")
-
-
-def test_apply_edits_adds_and_removes(monkeypatch, tmp_path):
-    pl = _edit_plex(monkeypatch, tmp_path,
-                    [_FakePLItem(10, "i1"), _FakePLItem(11, "i2")])
-    desired = [{"track_id": "10", "item_id": "i1"},   # keep
-               {"track_id": "20"}]                     # add; i2 dropped
-    title, stats = m.apply_playlist_edits(_CONFIG, "500", "My Mix", desired)
-    assert stats == {"added": 1, "removed": 1}
-    assert [i.ratingKey for i in pl.items()] == [10, 20]
-
-
-def test_apply_edits_reorders_in_place(monkeypatch, tmp_path):
-    pl = _edit_plex(monkeypatch, tmp_path,
-                    [_FakePLItem(10, "i1"), _FakePLItem(11, "i2"), _FakePLItem(12, "i3")])
-    desired = [{"track_id": "12", "item_id": "i3"},
-               {"track_id": "10", "item_id": "i1"},
-               {"track_id": "11", "item_id": "i2"}]
-    m.apply_playlist_edits(_CONFIG, "500", "My Mix", desired)
-    assert [i.ratingKey for i in pl.items()] == [12, 10, 11]
-
-
-def test_apply_edits_add_then_reorder(monkeypatch, tmp_path):
-    pl = _edit_plex(monkeypatch, tmp_path, [_FakePLItem(10, "i1")])
-    desired = [{"track_id": "20"},                     # new, goes first
-               {"track_id": "10", "item_id": "i1"}]
-    m.apply_playlist_edits(_CONFIG, "500", "My Mix", desired)
-    assert [i.ratingKey for i in pl.items()] == [20, 10]
-
-
-def test_apply_edits_renames_and_updates_history(monkeypatch, tmp_path):
-    hist = tmp_path / "h.json"
-    m.save_history(hist, {"abc": {"id": "abc", "playlist_rating_key": 500,
-                                  "playlist_name": "Old", "matched": 3}})
-    pl = _edit_plex(monkeypatch, tmp_path, [_FakePLItem(10, "i1")])
-    m.apply_playlist_edits(_CONFIG, "500", "Renamed",
-                           [{"track_id": "10", "item_id": "i1"}])
-    assert pl.title == "Renamed"
-    saved = m.load_history(hist)
-    assert saved["abc"]["playlist_name"] == "Renamed"
-    assert saved["abc"]["matched"] == 1
-
-
-def test_apply_edits_missing_playlist_raises(monkeypatch):
-    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex(playlists=[]))
-    with pytest.raises(m.PlexError):
-        m.apply_playlist_edits(_CONFIG, "500", "x", [{"track_id": "10"}])
-
-
-def test_delete_playlist_removes_and_forgets_history(monkeypatch, tmp_path):
-    hist = tmp_path / "h.json"
-    m.save_history(hist, {"abc": {"id": "abc", "playlist_rating_key": 500},
-                          "keep": {"id": "keep", "playlist_rating_key": 501}})
-    pl = _edit_plex(monkeypatch, tmp_path, [_FakePLItem(10, "i1")])
-    title = m.delete_playlist(_CONFIG, "500")
-    assert title == "My Mix" and pl.deleted is True
-    saved = m.load_history(hist)
-    assert "abc" not in saved and "keep" in saved
-
-
-def test_delete_playlist_missing_raises(monkeypatch):
-    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex(playlists=[]))
-    with pytest.raises(m.PlexError):
-        m.delete_playlist(_CONFIG, "500")

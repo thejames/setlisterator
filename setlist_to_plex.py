@@ -368,14 +368,23 @@ def get_music_section(plex, section_name):
     return section
 
 
-def connect_plex_section(config):
-    """Return the ``(client, section)`` pair the matcher searches against.
+class PlexService:
+    """Adapter letting gather_matches target a music backend.
 
-    Calls the module-level ``connect_plex``/``get_music_section`` by name so
-    tests that monkeypatch those still take effect.
+    ``connect`` returns the ``(client, section)`` pair the matcher searches
+    against. It calls the module-level ``connect_plex``/``get_music_section`` by
+    name (not via ``self``) so tests that monkeypatch those still take effect.
     """
-    plex = connect_plex(config["plex_baseurl"], config["plex_token"])
-    return plex, get_music_section(plex, config["music_library"])
+
+    name = "plex"
+
+    def connect(self, config):
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+        section = get_music_section(plex, config["music_library"])
+        return plex, section
+
+
+PLEX_SERVICE = PlexService()
 
 
 def _track_artist_name(track):
@@ -681,16 +690,17 @@ def save_drafts(drafts, path=None):
     _save_json_store(path or draft_path(), drafts)
 
 
-def new_draft(name="", seed=None):
-    """Build a fresh in-progress builder draft.
+def new_draft(service, name="", seed=None):
+    """Build a fresh in-progress builder draft for the given service.
 
-    A draft is a playlist-in-progress: an ordered ``tracks`` list plus optional
-    ``seed`` metadata (from a setlist.fm show) so Save can record history
-    without re-matching. Not persisted here; the caller saves it.
+    A draft is one service's playlist-in-progress: an ordered ``tracks`` list
+    plus optional ``seed`` metadata (from a setlist.fm show) so Save can record
+    history without re-matching. Not persisted here; the caller saves it.
     """
     now = datetime.now().isoformat(timespec="seconds")
     return {
         "id": uuid.uuid4().hex,
+        "service": service,
         "name": name,
         "created_at": now,
         "updated_at": now,
@@ -908,14 +918,18 @@ def print_report(playlist_name, added_count, missing, fuzzy):
 # Core pipeline (shared by the CLI and the web app)
 # ---------------------------------------------------------------------------
 
-def gather_matches(config, setlist_id, name=None, prefer_album=None):
-    """Fetch a setlist and match every song against the Plex library.
+def gather_matches(config, setlist_id, name=None, prefer_album=None,
+                   service=None):
+    """Fetch a setlist and match every song against a music service's catalog.
 
     Read-only: no playlist is created. Returns a dict with the show metadata,
     the resolved playlist name, and matched/missing/fuzzy lists (matched
     entries are deduped and carry the track rating key so a playlist can be
     built later without re-matching). Raises SetlistError or PlexError (with
     a human-readable message) on failure.
+
+    ``service`` selects the backend to match against (a PlexService by default);
+    it supplies the ``(client, section)`` the two-tier matcher searches.
 
     ``prefer_album`` biases which version of a song is chosen when it exists on
     several albums: ``None`` auto-detects a cohesive album (e.g. a live recording
@@ -939,8 +953,9 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None):
     if show["url"]:
         logger.info("Source:  %s", show["url"])
 
+    service = service or PLEX_SERVICE
     try:
-        _client, section = connect_plex_section(config)
+        _client, section = service.connect(config)
     except (PermissionError, ConnectionError, LookupError) as exc:
         raise PlexError(str(exc)) from exc
 
@@ -1037,12 +1052,17 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None):
         "fuzzy": fuzzy,
         "preferred_album": preferred_album,
         "album_options": album_options,
+        "service": service.name,
     }
 
 
 def _record_history(playlist_name, playlist_rating_key, matched_count,
-                    history_meta):
-    """Write/merge the history entry for a created or updated playlist."""
+                    history_meta, service="plex"):
+    """Write/merge the history entry for a created or updated playlist.
+
+    ``service`` tags which backend the playlist lives in ("plex"/"ytm"); older
+    entries without the key are read as "plex" for backward compatibility.
+    """
     if not (history_meta and history_meta.get("id")):
         return
     setlist_id = history_meta["id"]
@@ -1056,6 +1076,7 @@ def _record_history(playlist_name, playlist_rating_key, matched_count,
         "date": history_meta.get("date", entry.get("date", "")),
         "playlist_name": playlist_name,
         "playlist_rating_key": playlist_rating_key,
+        "service": service,
         "source": history_meta.get("source", "setlist"),
         "processed_at": datetime.now().isoformat(timespec="seconds"),
         "matched": matched_count,
@@ -1086,12 +1107,6 @@ def _playlist_summary(history_meta, added_count, track_count=None):
     meta = history_meta or {}
     if not meta:
         return ""
-    # A from-scratch builder playlist has no show behind it — skip all the
-    # setlist-flavored copy ("N of N songs", "full run of the show", missing).
-    if meta.get("source") == "builder":
-        count = track_count if track_count is not None else added_count
-        return (f"{count} track{'' if count == 1 else 's'}.\n\n"
-                "Created by Setlist-er-ator. 🤘")
     missing = meta.get("missing_tracks", []) or []
     # Prefer the true setlist length (set by callers that know it); fall back to
     # added + missing. This keeps "of N" honest when songs were excluded in the
@@ -1247,178 +1262,6 @@ def add_to_playlist(config, rating_key, name, rating_keys, history_meta=None):
     _record_history(playlist.title, getattr(playlist, "ratingKey", None),
                     len(existing) + len(tracks), history_meta)
     return playlist.title, len(tracks)
-
-
-# ---------------------------------------------------------------------------
-# Editing an existing Plex playlist (add / remove / reorder / rename / delete).
-# The builder loads a playlist's live tracks, the user edits, and save applies
-# only the differences. Track rows carry the Plex playlistItemID as ``item_id``
-# for rows already in the playlist (absent for newly-added rows).
-# ---------------------------------------------------------------------------
-
-def _playlist_rows(playlist):
-    """Ordered track rows for a Plex playlist, each with its item_id."""
-    rows = []
-    for item in playlist.items():
-        rk = getattr(item, "ratingKey", None)
-        rows.append({
-            "track_id": str(rk) if rk is not None else "",
-            "item_id": str(getattr(item, "playlistItemID", "") or ""),
-            "title": getattr(item, "title", ""),
-            "artist": _track_artist_name(item),
-            "album": _track_album(item),
-        })
-    return rows
-
-
-def open_playlist(config, playlist_id):
-    """Load an existing Plex playlist for editing: ``{name, tracks}``.
-
-    Raises PlexError if Plex is unreachable or the playlist is gone.
-    """
-    try:
-        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
-    except (PermissionError, ConnectionError) as exc:
-        raise PlexError(str(exc)) from exc
-    playlist = find_playlist(plex, rating_key=playlist_id)
-    if playlist is None:
-        raise PlexError("That playlist no longer exists in Plex.")
-    return {"name": playlist.title, "tracks": _playlist_rows(playlist)}
-
-
-def _reorder_playlist(playlist, desired_rows):
-    """Reorder the playlist's items to match ``desired_rows`` order.
-
-    Called after removals/additions, so the playlist already holds the right
-    set. Kept rows are matched by item_id; added rows (no item_id) by rating key
-    in order. Each item is moved after its predecessor — n sequential moves.
-    """
-    items = playlist.items()
-    by_itemid = {str(getattr(i, "playlistItemID", "")): i for i in items}
-    kept_ids = {r["item_id"] for r in desired_rows if r.get("item_id")}
-    added_by_key = {}
-    for i in items:
-        iid = str(getattr(i, "playlistItemID", ""))
-        if iid not in kept_ids:
-            added_by_key.setdefault(str(getattr(i, "ratingKey", "")), []).append(i)
-
-    target = []
-    for r in desired_rows:
-        iid = r.get("item_id")
-        if iid and iid in by_itemid:
-            target.append(by_itemid[iid])
-        else:
-            queue = added_by_key.get(str(r["track_id"]))
-            if queue:
-                target.append(queue.pop(0))
-
-    prev = None
-    for item in target:
-        try:
-            playlist.moveItem(item, after=prev)
-        except Exception as exc:
-            logger.warning("Could not move playlist item (%s).", exc)
-        prev = item
-
-
-def apply_playlist_edits(config, playlist_id, name, desired_rows):
-    """Apply add/remove/reorder/rename to an existing Plex playlist (smart diff).
-
-    ``desired_rows`` is the ordered target; each row has ``track_id`` and an
-    optional ``item_id`` (present = keep that playlist item, absent = add the
-    track). Diffs against the playlist's *current* contents so external changes
-    aren't clobbered. Returns ``(final_title, {"added": n, "removed": n})``.
-    """
-    try:
-        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
-    except (PermissionError, ConnectionError) as exc:
-        raise PlexError(str(exc)) from exc
-    playlist = find_playlist(plex, rating_key=playlist_id)
-    if playlist is None:
-        raise PlexError("That playlist no longer exists in Plex.")
-
-    current = playlist.items()
-    kept_ids = {r["item_id"] for r in desired_rows if r.get("item_id")}
-    to_remove = [i for i in current
-                 if str(getattr(i, "playlistItemID", "")) not in kept_ids]
-
-    added = []
-    for r in desired_rows:
-        if r.get("item_id"):
-            continue
-        try:
-            added.append(plex.fetchItem(int(r["track_id"])))
-        except Exception:
-            logger.warning("Could not fetch track %s; skipping.", r["track_id"])
-
-    try:
-        if to_remove:
-            playlist.removeItems(to_remove)
-        if added:
-            playlist.addItems(added)
-    except plex_exceptions.PlexApiException as exc:
-        raise PlexError(f"Failed to update playlist: {exc}") from exc
-
-    _reorder_playlist(playlist, desired_rows)
-
-    if name and name != playlist.title:
-        try:
-            playlist.editTitle(name)
-        except Exception as exc:
-            logger.warning("Could not rename playlist (%s).", exc)
-
-    final_title = getattr(playlist, "title", name)
-    _update_history_playlist(playlist_id, final_title, len(desired_rows))
-    return final_title, {"added": len(added), "removed": len(to_remove)}
-
-
-def delete_playlist(config, playlist_id):
-    """Delete a Plex playlist and drop its history entry. Returns its title."""
-    try:
-        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
-    except (PermissionError, ConnectionError) as exc:
-        raise PlexError(str(exc)) from exc
-    playlist = find_playlist(plex, rating_key=playlist_id)
-    if playlist is None:
-        raise PlexError("That playlist no longer exists in Plex.")
-    title = playlist.title
-    try:
-        playlist.delete()
-    except plex_exceptions.PlexApiException as exc:
-        raise PlexError(f"Failed to delete playlist: {exc}") from exc
-    _forget_history(playlist_id)
-    return title
-
-
-def _update_history_playlist(playlist_id, title, track_count):
-    """Refresh the history entry for a playlist after an in-place edit."""
-    hist_file = history_path()
-    history = load_history(hist_file)
-    for entry in history.values():
-        if str(entry.get("playlist_rating_key")) == str(playlist_id):
-            entry["playlist_name"] = title
-            entry["matched"] = track_count
-            entry["processed_at"] = datetime.now().isoformat(timespec="seconds")
-            try:
-                save_history(hist_file, history)
-            except OSError as exc:
-                logger.warning("Could not write history (%s).", exc)
-            return
-
-
-def _forget_history(playlist_id):
-    """Drop any history entry pointing at a (now-deleted) playlist id."""
-    hist_file = history_path()
-    history = load_history(hist_file)
-    keys = [k for k, e in history.items()
-            if str(e.get("playlist_rating_key")) == str(playlist_id)]
-    for k in keys:
-        del history[k]
-    if keys:
-        try:
-            save_history(hist_file, history)
-        except OSError as exc:
-            logger.warning("Could not write history (%s).", exc)
 
 
 def backfill_history(config):
