@@ -33,7 +33,7 @@
       <span class="sub">{{ s.venue }}{% if s.city %}, {{ s.city }}{% endif %}</span></td>
     <td class="sub">{{ s.date or "?" }}</td>
     <td>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <div class="rowactions">
         {% if s.prior %}
         <span class="pill pill-exact">created ✓</span>
         <form method="post" action="{{ url_for('preview') }}" style="margin:0"
@@ -42,12 +42,21 @@
           <button type="submit">Re-open</button>
         </form>
         <form method="post" action="{{ url_for('update_preview') }}" style="margin:0"
-              data-loading="Checking…">
+              data-loading="…">
           <input type="hidden" name="setlist" value="{{ s.url or s.id }}">
           <input type="hidden" name="playlist_rating_key"
                  value="{{ s.prior.get('playlist_rating_key', '') }}">
           <input type="hidden" name="name" value="{{ s.prior.get('playlist_name', '') }}">
-          <button type="submit">Update</button>
+          <button type="submit" class="icon-btn"
+                  title="Update — add newly available tracks" aria-label="Update playlist">
+            {# two circular arrows (refresh) #}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+          </button>
         </form>
         {% else %}
         <form method="post" action="{{ url_for('preview') }}" style="margin:0"
