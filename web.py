@@ -18,6 +18,7 @@ network. It reuses the core pipeline from setlist_to_plex.py:
 
 import json
 import os
+import uuid
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 
@@ -143,6 +144,7 @@ def attended_load():
 def search():
     """Search the Plex music library by title; returns JSON for the override UI."""
     q = (request.args.get("q") or "").strip()
+    include_albums = bool(request.args.get("albums"))
     if not q:
         return jsonify(results=[])
     try:
@@ -153,18 +155,41 @@ def search():
         plex = core.connect_plex(config["plex_baseurl"], config["plex_token"])
         section = core.get_music_section(plex, config["music_library"])
         tracks = section.searchTracks(title=q, maxresults=25)
+        albums = section.searchAlbums(title=q, maxresults=10) if include_albums else []
     except (PermissionError, ConnectionError, LookupError) as exc:
         return jsonify(error=str(exc)), 502
     except Exception as exc:  # any other Plex hiccup
         return jsonify(error=f"Search failed: {exc}"), 502
 
+    # Albums first (they're the higher-level match), then individual tracks.
     results = [{
+        "type": "album",
+        "rating_key": getattr(a, "ratingKey", None),
+        "title": a.title,
+        "artist": getattr(a, "parentTitle", "") or "",
+        "count": getattr(a, "leafCount", None),
+    } for a in albums]
+    results += [{
+        "type": "track",
         "rating_key": getattr(t, "ratingKey", None),
         "title": t.title,
         "artist": core._track_artist_name(t),
         "album": core._track_album(t),
     } for t in tracks]
     return jsonify(results=results)
+
+
+@app.get("/album/<rating_key>")
+def album_tracks(rating_key):
+    """An album's tracks in order (JSON) — backs 'add whole album' on the picker."""
+    try:
+        config = core.load_config()
+        tracks = core.get_album_tracks(config, rating_key)
+    except core.ConfigError as exc:
+        return jsonify(error=str(exc)), 400
+    except core.PlexError as exc:
+        return jsonify(error=str(exc)), 502
+    return jsonify(tracks=tracks)
 
 
 @app.post("/preview")
@@ -345,13 +370,16 @@ def playlist_delete_confirm():
     if not playlist_id:
         return _error("Nothing to delete", "No playlist was specified.", 400)
     return render_template("confirm_delete.html", playlist_id=playlist_id,
-                           name=request.args.get("name", ""))
+                           name=request.args.get("name", ""),
+                           back=_delete_back(request.args.get("back")))
 
 
 @app.post("/playlist/delete")
 def playlist_delete():
-    """Delete the Plex playlist (and drop its history entry), then back to History."""
+    """Delete the Plex playlist (and drop its history entry), then return to the
+    page the delete was launched from (History by default, Playlists otherwise)."""
     playlist_id = (request.form.get("id") or "").strip()
+    back = _delete_back(request.form.get("back"))
     if not playlist_id:
         return _error("Nothing to delete", "No playlist was specified.", 400)
     try:
@@ -361,7 +389,12 @@ def playlist_delete():
         return _error("Configuration needed", str(exc))
     except core.PlexError as exc:
         return _error("Couldn't delete playlist", str(exc))
-    return redirect(url_for("history"))
+    return redirect(url_for(back))
+
+
+def _delete_back(value):
+    """Whitelist the post-delete redirect target (avoids url_for on junk)."""
+    return value if value in ("history", "playlists") else "history"
 
 
 @app.get("/build")
@@ -374,8 +407,10 @@ def build_page():
 def build_create():
     """Create a Plex playlist from hand-picked rating keys.
 
-    A setlist-free path: no matching, and (history_meta=None) nothing recorded
-    to History — the playlist lives only in Plex.
+    A setlist-free path (no matching). Recorded to History under a namespaced
+    ``manual:<uuid>`` id with source="manual" so it's badged as app-created on
+    the Playlists page; the manual source keeps the setlist-shaped Plex summary
+    off it.
     """
     name = (request.form.get("name") or "").strip()
     rating_keys = [k for k in request.form.getlist("rating_keys") if k.strip()]
@@ -383,9 +418,11 @@ def build_create():
         return _error("Missing name", "A playlist name is required.", 400)
     if not rating_keys:
         return _error("Nothing to create", "Add at least one track.", 400)
+    history_meta = {"id": "manual:" + uuid.uuid4().hex, "source": "manual",
+                    "artist": "", "date": "", "url": ""}
     try:
         config = core.load_config()
-        final_name = core.create_playlist(config, name, rating_keys, history_meta=None)
+        final_name = core.create_playlist(config, name, rating_keys, history_meta)
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
     except core.PlexError as exc:
@@ -393,6 +430,52 @@ def build_create():
 
     added = len(dict.fromkeys(rating_keys))
     return render_template("created.html", name=final_name, added=added, missing=[])
+
+
+@app.get("/playlists")
+def playlists():
+    """List the Plex audio playlists, badging the ones this app created."""
+    try:
+        config = core.load_config()
+        rows = core.list_playlists(config)
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    except core.PlexError as exc:
+        return _error("Plex problem", str(exc))
+    return render_template("playlists.html", playlists=rows)
+
+
+@app.get("/playlists/<rating_key>/edit")
+def playlist_edit(rating_key):
+    """Open the in-place editor for an existing playlist (tracks preloaded)."""
+    try:
+        config = core.load_config()
+        pl = core.get_playlist_tracks(config, rating_key)
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    except core.PlexError as exc:
+        return _error("Plex problem", str(exc))
+    initial = [t for t in pl["tracks"] if t["rating_key"] is not None]
+    return render_template("playlist_edit.html", playlist=pl, initial=initial)
+
+
+@app.post("/playlists/<rating_key>/edit")
+def playlist_save(rating_key):
+    """Apply the editor's changes (rename + exact ordered membership) to Plex."""
+    name = (request.form.get("name") or "").strip()
+    rating_keys = [k for k in request.form.getlist("rating_keys") if k.strip()]
+    if not name:
+        return _error("Missing name", "A playlist name is required.", 400)
+    if not rating_keys:
+        return _error("Nothing to save", "A playlist needs at least one track.", 400)
+    try:
+        config = core.load_config()
+        core.set_playlist(config, rating_key, name, rating_keys)
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    except core.PlexError as exc:
+        return _error("Plex problem", str(exc))
+    return redirect(url_for("playlists"))
 
 
 def _port():

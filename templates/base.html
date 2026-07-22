@@ -44,6 +44,22 @@
       color: var(--muted); }
     .navlinks a { color: var(--muted); }
     .navlinks a:hover { color: var(--text); text-decoration: none; }
+    /* "New" dropdown: from setlist / manually */
+    .navdrop { position: relative; display: inline-flex; }
+    .navdrop-btn { background: none; border: none; padding: 0; cursor: pointer;
+      font: inherit; font-weight: 600; color: var(--muted);
+      display: inline-flex; align-items: center; gap: 4px; }
+    .navdrop-btn:hover, .navdrop-btn[aria-expanded="true"] { color: var(--text); }
+    .navdrop-caret { font-size: 9px; opacity: .8; }
+    .navdrop-menu { position: absolute; top: calc(100% + 10px); left: 0; z-index: 100;
+      min-width: 152px; background: #1B1B21; border: 1px solid var(--border2);
+      border-radius: 10px; box-shadow: 0 16px 40px rgba(0,0,0,.55); padding: 6px;
+      display: flex; flex-direction: column; gap: 2px; }
+    .navdrop-menu[hidden] { display: none; }
+    .navdrop-menu a { color: var(--muted); padding: 7px 10px; border-radius: 7px;
+      font-weight: 600; white-space: nowrap; }
+    .navdrop-menu a:hover { color: var(--text); background: var(--panel3);
+      text-decoration: none; }
 
     h2 { font-size: 13px; letter-spacing: .1em; text-transform: uppercase;
       color: var(--text); font-weight: 600; margin: 30px 0 13px; }
@@ -201,19 +217,37 @@
       font-weight: 400; background: var(--panel3); border: 1px solid var(--border2);
       color: var(--text); }
     .result:hover { background: var(--blue); color: #0F0F12; border-color: var(--blue); }
+    .result-album { display: flex; align-items: center; gap: 8px; }
+    .reslabel { flex: none; font-size: 10px; font-weight: 700; letter-spacing: .06em;
+      color: var(--blue); background: #6E9BF01f; border: 1px solid #6E9BF03d;
+      border-radius: 5px; padding: 2px 6px; }
+    .result-album:hover .reslabel { color: #0F0F12; background: #ffffff55;
+      border-color: transparent; }
+    /* Album disclosure: toggle + lazily-revealed track list */
+    .albumitem { margin: 4px 0; }
+    .albumhead { display: flex; align-items: stretch; gap: 6px; }
+    .albumhead .result-album { flex: 1; margin: 0; }
+    .album-toggle { flex: none; width: 34px; background: var(--panel3);
+      border: 1px solid var(--border2); color: var(--muted); border-radius: 8px;
+      cursor: pointer; font-size: 11px; line-height: 1; }
+    .album-toggle:hover { color: var(--text); border-color: var(--blue); }
+    .album-tracks { margin: 4px 0 2px 40px; display: flex; flex-direction: column;
+      gap: 4px; color: var(--muted); font-size: 12px; }
+    .album-tracks[hidden] { display: none; }   /* author display: flex would otherwise defeat [hidden] */
+    .album-tracks .result { margin: 0; font-size: 13px; }
     .chosen { color: var(--green); font-weight: 600; }
     .miss { color: var(--red); }
-    /* Manual build page: chosen-track rows */
-    .chosenlist { list-style: none; margin: 14px 0 0; padding: 0;
-      display: flex; flex-direction: column; gap: 6px; }
-    .chosen-item { display: flex; align-items: center; gap: 10px;
-      background: var(--panel3); border: 1px solid var(--border2);
-      border-radius: 8px; padding: 8px 12px; font-size: 14px; }
-    .chosen-item .lbl { flex: 1; min-width: 0; overflow: hidden;
-      text-overflow: ellipsis; white-space: nowrap; }
-    .chosen-item .rm { flex: none; background: none; border: none;
-      color: var(--muted); cursor: pointer; padding: 2px 6px; font-size: 15px; }
-    .chosen-item .rm:hover { color: var(--red); }
+    /* Playlist builder / editor: setlist-style numbered track table */
+    .buildempty { color: var(--faint); font-size: 13px; padding: 16px; }
+    .chosen-row .grip { cursor: grab; color: var(--dim); user-select: none;
+      text-align: center; width: 36px; }
+    .chosen-row.dragging { opacity: .45; }
+    .chosen-row.dragging .grip { cursor: grabbing; }
+    .chosen-row td { vertical-align: middle; }
+    .trackrm { background: none; border: none; color: var(--muted);
+      cursor: pointer; padding: 2px 8px; font-size: 15px; line-height: 1; }
+    .trackrm:hover { color: var(--red); }
+    .addrow { max-width: 520px; }
     .big { font-size: 21px; font-weight: 700; color: #fff; }
 
     /* Fixed action bar */
@@ -340,8 +374,16 @@
     <nav class="navbar">
       <a class="brand" href="{{ url_for('index') }}">Setlist <span class="arrow">→</span> Plex</a>
       <span class="navlinks">
-        <a href="{{ url_for('index') }}">New</a>
-        <a href="{{ url_for('build_page') }}">Build</a>
+        <span class="navdrop" data-navdrop>
+          <button type="button" class="navdrop-btn" data-navdrop-toggle
+                  aria-expanded="false" aria-haspopup="true">New
+            <span class="navdrop-caret">▾</span></button>
+          <div class="navdrop-menu" hidden>
+            <a href="{{ url_for('index') }}">from setlist</a>
+            <a href="{{ url_for('build_page') }}">manually</a>
+          </div>
+        </span>
+        <a href="{{ url_for('playlists') }}">Playlists</a>
         <a href="{{ url_for('attended') }}">Attended</a>
         <a href="{{ url_for('history') }}">History</a>
         <a href="{{ url_for('buylist') }}">Buy list</a>

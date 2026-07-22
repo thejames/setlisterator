@@ -23,7 +23,8 @@
   // --- manual library search (shared by missing cards and matched rows) ----
   // `scope` is any element containing a `.q` input and a `.results` box; each
   // result button invokes onPick(track, label).
-  async function doSearch(scope, onPick) {
+  async function doSearch(scope, onPick, opts) {
+    opts = opts || {};
     const query = scope.querySelector(".q").value.trim();
     const results = scope.querySelector(".results");
     results.textContent = "";
@@ -31,7 +32,9 @@
     results.textContent = "searching…";
     let data;
     try {
-      const resp = await fetch("/search?q=" + encodeURIComponent(query));
+      const url = "/search?q=" + encodeURIComponent(query) +
+        (opts.albums ? "&albums=1" : "");
+      const resp = await fetch(url);
       data = await resp.json();
     } catch (err) { results.textContent = "search failed"; return; }
     if (data.error) { results.textContent = data.error; return; }
@@ -41,12 +44,65 @@
     results.textContent = "";
     data.results.forEach(function (t) {
       if (t.rating_key == null) return;
+      if (t.type === "album") { results.appendChild(albumItem(t, onPick)); return; }
       const label = t.artist + " — " + t.title + (t.album ? " · " + t.album : "");
       const b = el("button", "result", label);
       b.type = "button";
       b.addEventListener("click", function () { onPick(t, label); });
       results.appendChild(b);
     });
+  }
+
+  // An album search result: a whole-album "add" button (click the badge/label)
+  // plus a disclosure toggle that lazily reveals the album's tracks so a single
+  // track can be added — handy when you recall the album but not the song.
+  function albumItem(album, onPick) {
+    const wrap = el("div", "albumitem");
+    const head = el("div", "albumhead");
+
+    const toggle = el("button", "album-toggle", "▸");
+    toggle.type = "button";
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.setAttribute("aria-label", "Show album tracks");
+
+    const add = el("button", "result result-album");
+    add.type = "button";
+    add.appendChild(el("span", "reslabel", "ALBUM"));
+    add.appendChild(el("span", null, album.title + " — " + album.artist +
+      (album.count ? " · " + album.count + " tracks" : "")));
+    add.addEventListener("click", function () { onPick(album, album.title); });
+
+    const sub = el("div", "album-tracks");
+    sub.hidden = true;
+    let loaded = false;
+    toggle.addEventListener("click", async function () {
+      if (sub.hidden && !loaded) {                 // fetch tracks on first open
+        loaded = true;
+        sub.textContent = "loading…";
+        try {
+          const resp = await fetch("/album/" + encodeURIComponent(album.rating_key));
+          const data = await resp.json();
+          sub.textContent = "";
+          (data.tracks || []).forEach(function (tr) {
+            if (tr.rating_key == null) return;
+            const tb = el("button", "result result-track", tr.title || "");
+            tb.type = "button";
+            tb.addEventListener("click", function () { onPick(tr, tr.title); });
+            sub.appendChild(tb);
+          });
+          if (!sub.children.length) sub.textContent = "no tracks in this album";
+        } catch (e) { sub.textContent = "couldn't load album"; loaded = false; }
+      }
+      sub.hidden = !sub.hidden;
+      toggle.textContent = sub.hidden ? "▸" : "▾";
+      toggle.setAttribute("aria-expanded", String(!sub.hidden));
+    });
+
+    head.appendChild(toggle);
+    head.appendChild(add);
+    wrap.appendChild(head);
+    wrap.appendChild(sub);
+    return wrap;
   }
   // Choose a library track for a (previously) missing card.
   function chooseMissing(card, track, label) {
@@ -164,6 +220,24 @@
         btn.textContent = form.dataset.loading;
         btn.disabled = true;
       }
+    });
+  });
+
+  // Nav "New" dropdown (from setlist / manually): click to toggle, click-away closes.
+  document.querySelectorAll("[data-navdrop-toggle]").forEach(function (btn) {
+    const menu = btn.parentElement.querySelector(".navdrop-menu");
+    if (!menu) return;
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      const opening = menu.hidden;
+      menu.hidden = !opening;
+      btn.setAttribute("aria-expanded", String(opening));
+    });
+  });
+  document.addEventListener("click", function () {
+    document.querySelectorAll(".navdrop-menu").forEach(function (m) { m.hidden = true; });
+    document.querySelectorAll("[data-navdrop-toggle]").forEach(function (b) {
+      b.setAttribute("aria-expanded", "false");
     });
   });
 
@@ -319,43 +393,135 @@
   });
   updateCount();
 
-  // --- manual build page: search library, accumulate picks, then create -----
+  // --- build page + playlist editor: numbered, draggable track table --------
+  // Shared by /build and /playlists/<id>/edit (setlist-style layout). No-ops
+  // when the table scope is absent. Submission order is the DOM order of the
+  // hidden rating_keys inputs, so reordering the rows reorders the playlist.
   (function wireBuild() {
     const scope = document.querySelector("[data-build]");
-    if (!scope) return;                         // only present on /build
-    const chosen = scope.querySelector("#chosen");
-    const q = scope.querySelector(".q");
-    const go = scope.querySelector(".go");
+    if (!scope) return;                         // only on build/editor pages
+    const table = scope.querySelector(".tracktable");
+    const body = table && table.tBodies[0];     // header <tr> + data rows
+    if (!body) return;
+    const empty = scope.querySelector("[data-build-empty]");
     const submit = document.querySelector("[data-build-submit]");
+    const counts = document.querySelectorAll("[data-count]");
     const picked = new Set();
+    let dragEl = null;
 
-    function refresh() { if (submit) submit.disabled = picked.size === 0; }
+    function refresh() {
+      if (submit) submit.disabled = picked.size === 0;
+      if (empty) empty.hidden = picked.size !== 0;
+      counts.forEach(function (c) { c.textContent = picked.size; });
+    }
 
-    function addTrack(t, label) {
+    function renumber() {
+      body.querySelectorAll(".chosen-row").forEach(function (tr, i) {
+        const numTd = tr.querySelector(".num");
+        if (numTd) numTd.textContent = (i + 1 < 10 ? "0" : "") + (i + 1);
+      });
+    }
+
+    function addTrack(t) {
       const key = String(t.rating_key);
       if (picked.has(key)) return;              // dedupe: skip already-chosen
       picked.add(key);
-      const li = el("li", "chosen-item");
+
+      const tr = el("tr", "chosen-row");
+      tr.draggable = true;                      // drag the row to reorder
+
+      const gripTd = el("td", "grip", "⠿");
+      gripTd.setAttribute("aria-hidden", "true");
+
+      const numTd = el("td", "num");            // filled by renumber()
+
+      // Artist / Album / Track broken out into their own columns.
+      const trackTd = el("td", "trunc", t.title || "");
       const hidden = el("input");
       hidden.type = "hidden"; hidden.name = "rating_keys"; hidden.value = key;
-      const rm = el("button", "rm", "✕");
+      trackTd.appendChild(hidden);
+      const artistTd = el("td", "trunc", t.artist || "");
+      const albumTd = el("td", "trunc sub", t.album || "");
+
+      const rmTd = el("td");
+      rmTd.style.textAlign = "right";
+      const rm = el("button", "trackrm", "✕");
       rm.type = "button";
-      rm.setAttribute("aria-label", "Remove");
+      rm.setAttribute("aria-label", "Remove track");
       rm.addEventListener("click", function () {
-        picked.delete(key); li.remove(); refresh();
+        picked.delete(key); tr.remove(); renumber(); refresh();
       });
-      li.appendChild(hidden);
-      li.appendChild(el("span", "lbl", label));
-      li.appendChild(rm);
-      chosen.appendChild(li);
-      refresh();
+      rmTd.appendChild(rm);
+
+      tr.addEventListener("dragstart", function () {
+        dragEl = tr; tr.classList.add("dragging");
+      });
+      tr.addEventListener("dragend", function () {
+        tr.classList.remove("dragging"); dragEl = null; renumber();
+      });
+
+      tr.appendChild(gripTd);
+      tr.appendChild(numTd);
+      tr.appendChild(trackTd);
+      tr.appendChild(artistTd);
+      tr.appendChild(albumTd);
+      tr.appendChild(rmTd);
+      body.appendChild(tr);
+      renumber(); refresh();
     }
 
-    function run() { doSearch(scope, addTrack); }
-    if (go) go.addEventListener("click", run);
-    if (q) q.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") { e.preventDefault(); run(); }
+    function afterElement(y) {
+      const rows = Array.prototype.slice.call(
+        body.querySelectorAll(".chosen-row:not(.dragging)"));
+      let best = null, bestOffset = Number.NEGATIVE_INFINITY;
+      rows.forEach(function (row) {
+        const box = row.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > bestOffset) { bestOffset = offset; best = row; }
+      });
+      return best;                              // null => append at end
+    }
+    body.addEventListener("dragover", function (e) {
+      if (!dragEl) return;
+      e.preventDefault();
+      const ref = afterElement(e.clientY);
+      if (ref == null) body.appendChild(dragEl);
+      else body.insertBefore(dragEl, ref);
     });
+
+    // Add-tracks search box (its own scope, outside the table panel). Results
+    // include whole albums; clicking one inserts all its tracks in order.
+    async function onAdd(t) {
+      if (t.type === "album") {
+        try {
+          const resp = await fetch("/album/" + encodeURIComponent(t.rating_key));
+          const data = await resp.json();
+          if (data.tracks) data.tracks.forEach(addTrack);   // in album order, deduped
+        } catch (e) { /* leave the list unchanged on failure */ }
+      } else {
+        addTrack(t);
+      }
+    }
+    const addScope = document.querySelector("[data-add]");
+    if (addScope) {
+      const q = addScope.querySelector(".q");
+      const go = addScope.querySelector(".go");
+      const run = function () { doSearch(addScope, onAdd, {albums: true}); };
+      if (go) go.addEventListener("click", run);
+      if (q) q.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); run(); }
+      });
+    }
+
+    // Seed any preloaded tracks (the editor renders them as JSON).
+    const seedEl = document.querySelector("[data-build-initial]");
+    if (seedEl) {
+      let seed = [];
+      try { seed = JSON.parse(seedEl.textContent || "[]"); } catch (e) { seed = []; }
+      seed.forEach(function (t) {
+        if (t && t.rating_key != null) addTrack(t);
+      });
+    }
     refresh();
   })();
 })();

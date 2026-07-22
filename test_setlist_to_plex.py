@@ -1072,9 +1072,17 @@ class _FakePlaylistObj:
         self.added = []
         self.summary = None
         self.deleted = False
+        self.retitled = None
+
+    @property
+    def leafCount(self):
+        return len(self._items)
 
     def items(self):
         return list(self._items)
+
+    def reload(self):
+        return self
 
     def delete(self):
         self.deleted = True
@@ -1082,6 +1090,22 @@ class _FakePlaylistObj:
     def addItems(self, tracks):
         self.added.extend(tracks)
         self._items.extend(tracks)
+
+    def removeItems(self, tracks):
+        for t in tracks:
+            if t in self._items:
+                self._items.remove(t)
+
+    def moveItem(self, item, after=None):
+        self._items.remove(item)
+        if after is None:
+            self._items.insert(0, item)
+        else:
+            self._items.insert(self._items.index(after) + 1, item)
+
+    def editTitle(self, title):
+        self.retitled = title
+        self.title = title
 
     def editSummary(self, summary, locked=True):
         self.summary = summary
@@ -1095,7 +1119,7 @@ class _FakeCreatePlex:
     def fetchItem(self, key):
         return _FakeTrack(f"track-{key}", "Phish", rating_key=int(key))
 
-    def playlists(self):
+    def playlists(self, playlistType=None, **kwargs):
         return list(self._playlists)
 
     def createPlaylist(self, title, items=None):
@@ -1173,6 +1197,120 @@ def test_delete_playlist_leaves_unrelated_history(monkeypatch, tmp_path):
     m.delete_playlist(_CONFIG, "999")
 
     assert set(m.load_history(hist)) == {"keep"}   # only the matching row dropped
+
+
+# --- playlists list / editor (list_playlists, get_playlist_tracks, set_playlist)
+
+def test_list_playlists_flags_app_created(monkeypatch, tmp_path):
+    pls = [_FakePlaylistObj("Zzz Mix", rating_key=5,
+                            items=[_FakeTrack("a", "x", rating_key=1)]),
+           _FakePlaylistObj("Aaa Show", rating_key=999,
+                            items=[_FakeTrack("b", "y", rating_key=2),
+                                   _FakeTrack("c", "y", rating_key=3)])]
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex(pls))
+    hist = tmp_path / "history.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.save_history(hist, {"abc": {"id": "abc", "playlist_rating_key": 999}})
+
+    rows = m.list_playlists(_CONFIG)
+
+    assert [r["title"] for r in rows] == ["Aaa Show", "Zzz Mix"]   # sorted by title
+    assert rows[0]["app_created"] is True and rows[0]["count"] == 2  # in history
+    assert rows[1]["app_created"] is False                          # not in history
+
+
+def test_get_playlist_tracks_returns_rows(monkeypatch):
+    pl = _FakePlaylistObj("Mix", rating_key=7, items=[
+        _FakeTrack("Song A", "Artist", rating_key=1, album="Alb"),
+        _FakeTrack("Song B", "Artist", rating_key=2, album="Alb2")])
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
+
+    got = m.get_playlist_tracks(_CONFIG, "7")
+
+    assert got["title"] == "Mix"
+    assert [t["rating_key"] for t in got["tracks"]] == [1, 2]
+    assert got["tracks"][0]["artist"] == "Artist"
+    assert got["tracks"][0]["album"] == "Alb"
+
+
+def test_get_playlist_tracks_missing_raises(monkeypatch):
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([]))
+    with pytest.raises(m.PlexError):
+        m.get_playlist_tracks(_CONFIG, "7")
+
+
+def test_get_album_tracks_returns_ordered(monkeypatch):
+    class _Album:
+        def tracks(self):
+            return [_FakeTrack("A", "Primus", rating_key=1, album="Pork Soda"),
+                    _FakeTrack("B", "Primus", rating_key=2, album="Pork Soda")]
+
+    class _Plex:
+        def fetchItem(self, key):
+            return _Album()
+
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _Plex())
+    got = m.get_album_tracks(_CONFIG, "900")
+    assert [t["rating_key"] for t in got] == [1, 2]          # album order preserved
+    assert got[0]["artist"] == "Primus" and got[0]["album"] == "Pork Soda"
+
+
+def test_get_album_tracks_bad_id_raises(monkeypatch):
+    class _Plex:
+        def fetchItem(self, key):
+            raise Exception("not found")
+
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _Plex())
+    with pytest.raises(m.PlexError):
+        m.get_album_tracks(_CONFIG, "900")
+
+
+def test_set_playlist_applies_rename_membership_and_order(monkeypatch, tmp_path):
+    items = [_FakeTrack("A", "x", rating_key=1), _FakeTrack("B", "x", rating_key=2),
+             _FakeTrack("C", "x", rating_key=3)]
+    pl = _FakePlaylistObj("Old Name", rating_key=999, items=items)
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
+    hist = tmp_path / "history.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.save_history(hist, {"abc": {"id": "abc", "playlist_rating_key": 999,
+                                  "playlist_name": "Old Name", "matched": 3}})
+
+    # Drop track 2, keep 3 then 1 (reordered), add new track 4.
+    title, count = m.set_playlist(_CONFIG, "999", "New Name", ["3", "1", "4"])
+
+    assert title == "New Name"
+    assert pl.title == "New Name"                          # renamed in Plex
+    assert count == 3
+    assert [t.ratingKey for t in pl.items()] == [3, 1, 4]  # exact desired order
+    saved = m.load_history(hist)
+    assert saved["abc"]["playlist_name"] == "New Name"     # history entry refreshed
+    assert saved["abc"]["matched"] == 3
+
+
+def test_set_playlist_missing_raises(monkeypatch):
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([]))
+    with pytest.raises(m.PlexError):
+        m.set_playlist(_CONFIG, "7", "X", ["1"])
+
+
+def test_playlist_summary_manual_is_empty():
+    # A manually-built playlist gets no setlist-shaped summary.
+    assert m._playlist_summary({"source": "manual", "id": "manual:x"}, 3, 3) == ""
+
+
+def test_create_playlist_manual_records_without_summary(monkeypatch, tmp_path):
+    fake = _FakeCreatePlex()
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: fake)
+    hist = tmp_path / "history.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+
+    m.create_playlist(_CONFIG, "My Mix", ["10", "11"],
+                      history_meta={"id": "manual:abc", "source": "manual"})
+
+    assert fake._playlists[-1].summary is None      # no setlist summary written
+    saved = m.load_history(hist)
+    assert saved["manual:abc"]["source"] == "manual"
+    assert saved["manual:abc"]["playlist_name"] == "My Mix"
 
 
 def test_playlist_summary_full_record():

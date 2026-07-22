@@ -19,6 +19,18 @@
         <span class="miss">· {{ e.get("missing") }} missing</span>{% endif %}</td>
     <td>
       <div class="rowactions">
+        {% if e.get("source") == "manual" %}
+        {# Manually-built playlist: no setlist behind it, so edit in place. #}
+        <a href="{{ url_for('playlist_edit', rating_key=e.get('playlist_rating_key')) }}"
+           class="icon-btn" title="Edit playlist" aria-label="Edit playlist">
+          {# pencil #}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"></path>
+          </svg>
+        </a>
+        {% else %}
         <form method="post" action="{{ url_for('preview') }}" style="margin:0"
               data-loading="Matching…">
           <input type="hidden" name="setlist" value="{{ e.get('url') or e.get('id', '') }}">
@@ -40,6 +52,7 @@
             </svg>
           </button>
         </form>
+        {% endif %}
         {% if e.get("playlist_rating_key") %}
         <a href="{{ url_for('playlist_delete_confirm', id=e.playlist_rating_key, name=e.get('playlist_name', '')) }}"
            class="icon-btn icon-del" title="Delete playlist" aria-label="Delete playlist">

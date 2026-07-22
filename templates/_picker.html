@@ -1,0 +1,57 @@
+{# Shared track picker (Build page + playlist editor), styled like the setlist
+   create view: a numbered, draggable track table with a fixed action bar.
+   Context vars: action, submit_label, loading_label (opt), name_value (opt),
+   initial (opt list of {rating_key,label} to seed), delete_link (opt),
+   hint (opt). #}
+<form method="post" action="{{ action }}"
+      data-loading="{{ loading_label|default('Saving…') }}">
+
+  <div class="header-divider">
+    <div class="label">Playlist name</div>
+    <input class="title-input" name="name" required autofocus
+           placeholder="My playlist" value="{{ name_value|default('') }}">
+    {% if hint %}<div class="meta"><span class="sub">{{ hint }}</span></div>{% endif %}
+  </div>
+
+  <div class="panel" data-build>
+    <table class="tracktable">
+      <tr>
+        <th style="width:36px"></th>
+        <th style="text-align:center;width:52px">#</th>
+        <th style="width:34%">Track</th>
+        <th>Artist</th>
+        <th>Album</th>
+        <th style="text-align:right;width:56px"></th>
+      </tr>
+      {# draggable track rows are appended here by app.js (build + seed) #}
+    </table>
+    <p class="buildempty" data-build-empty>Nothing yet — search below to add
+      tracks. Drag rows by the handle to reorder.</p>
+  </div>
+
+  <div class="section-head">
+    <span class="dot amber"></span><span class="t">Add tracks</span>
+    <span class="s">search your library and click a result</span>
+  </div>
+  <div data-add>
+    <div class="searchrow addrow">
+      <input type="search" class="q" placeholder="search by song title"
+             aria-label="Search library">
+      <button type="button" class="go">Search</button>
+    </div>
+    <div class="results"></div>
+  </div>
+
+  {# tracks to preload into the table (empty for the Build page) #}
+  <script type="application/json" data-build-initial>{{ (initial|default([]))|tojson }}</script>
+
+  <div class="actionbar"><div class="inner">
+    <div class="count"><b data-count>0</b><span>tracks</span></div>
+    <div class="grow"></div>
+    {% if delete_link %}
+    <a href="{{ delete_link }}" class="btn-ghost btn-del">Delete playlist</a>
+    {% endif %}
+    <button type="submit" class="btn-accent" data-build-submit disabled>
+      {{ submit_label }}</button>
+  </div></div>
+</form>

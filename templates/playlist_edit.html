@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ playlist.title }} — Setlist-er-ator{% endblock %}
+{% block content %}
+{% set action = url_for('playlist_save', rating_key=playlist.rating_key) %}
+{% set submit_label = "Save changes" %}
+{% set loading_label = "Saving…" %}
+{% set name_value = playlist.title %}
+{% set delete_link = url_for('playlist_delete_confirm', id=playlist.rating_key,
+   name=playlist.title, back='playlists') %}
+{% set hint = "Editing this Plex playlist in place — changes save back to it." %}
+{% include "_picker.html" %}
+{% endblock %}

@@ -722,6 +722,26 @@ def _forget_history(playlist_id):
             logger.warning("Could not write history (%s).", exc)
 
 
+def _update_history_playlist(playlist_id, name, count):
+    """Refresh name/track-count on any history entry for an edited playlist.
+
+    No-op when the playlist isn't in history (e.g. an externally-made one).
+    """
+    hist_file = history_path()
+    history = load_history(hist_file)
+    changed = False
+    for entry in history.values():
+        if str(entry.get("playlist_rating_key")) == str(playlist_id):
+            entry["playlist_name"] = name
+            entry["matched"] = count
+            changed = True
+    if changed:
+        try:
+            save_history(hist_file, history)
+        except OSError as exc:
+            logger.warning("Could not write history (%s).", exc)
+
+
 def should_process(history, setlist_id, force, is_tty, prompt_fn=input):
     """Decide whether to process a setlist given prior history.
 
@@ -1117,7 +1137,9 @@ def _playlist_summary(history_meta, added_count, track_count=None):
     item count still makes sense.
     """
     meta = history_meta or {}
-    if not meta:
+    # Manually-built playlists have no setlist behind them; the setlist-shaped
+    # summary (counts, "full run", source link) would be misleading, so skip it.
+    if not meta or meta.get("source") == "manual":
         return ""
     missing = meta.get("missing_tracks", []) or []
     # Prefer the true setlist length (set by callers that know it); fall back to
@@ -1297,6 +1319,162 @@ def delete_playlist(config, playlist_id):
             raise PlexError(f"Failed to delete playlist: {exc}") from exc
     _forget_history(playlist_id)
     return title
+
+
+def list_playlists(config):
+    """List Plex audio playlists, flagging which this app created.
+
+    A playlist is "app-created" if its rating key appears in our history store
+    (setlist, Update, or Build creations). Returns dicts sorted by title:
+    ``{rating_key, title, count, app_created}`` (``count`` from ``leafCount``,
+    so no per-playlist items() call). Raises PlexError on connect failure.
+    """
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    except (PermissionError, ConnectionError) as exc:
+        raise PlexError(str(exc)) from exc
+
+    ours = {str(e.get("playlist_rating_key"))
+            for e in load_history(history_path()).values()
+            if e.get("playlist_rating_key") is not None}
+    try:
+        playlists = plex.playlists(playlistType="audio")
+    except Exception as exc:
+        raise PlexError(f"Could not list playlists: {exc}") from exc
+
+    rows = []
+    for pl in playlists:
+        key = getattr(pl, "ratingKey", None)
+        rows.append({
+            "rating_key": key,
+            "title": getattr(pl, "title", "") or "",
+            "count": getattr(pl, "leafCount", None),
+            "app_created": str(key) in ours,
+        })
+    rows.sort(key=lambda r: r["title"].lower())
+    return rows
+
+
+def get_playlist_tracks(config, rating_key):
+    """Return an existing playlist's tracks for the editor.
+
+    ``{rating_key, title, tracks: [{rating_key, artist, title, album}]}``.
+    Raises PlexError if the playlist is gone.
+    """
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    except (PermissionError, ConnectionError) as exc:
+        raise PlexError(str(exc)) from exc
+
+    playlist = find_playlist(plex, rating_key=rating_key)
+    if playlist is None:
+        raise PlexError("That playlist no longer exists in Plex.")
+
+    tracks = [{
+        "rating_key": getattr(item, "ratingKey", None),
+        "artist": _track_artist_name(item),
+        "title": getattr(item, "title", "") or "",
+        "album": _track_album(item),
+    } for item in playlist.items()]
+    return {"rating_key": getattr(playlist, "ratingKey", None),
+            "title": playlist.title, "tracks": tracks}
+
+
+def get_album_tracks(config, rating_key):
+    """Return an album's tracks in playing order (for 'add whole album').
+
+    ``[{rating_key, title, artist, album}]``. Raises PlexError if the album
+    can't be loaded.
+    """
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    except (PermissionError, ConnectionError) as exc:
+        raise PlexError(str(exc)) from exc
+    try:
+        album = plex.fetchItem(int(rating_key))
+        tracks = album.tracks()
+    except Exception as exc:
+        raise PlexError(f"Could not load album: {exc}") from exc
+    return [{
+        "rating_key": getattr(t, "ratingKey", None),
+        "artist": _track_artist_name(t),
+        "title": getattr(t, "title", "") or "",
+        "album": _track_album(t),
+    } for t in tracks]
+
+
+def set_playlist(config, rating_key, name, rating_keys):
+    """Apply an edit to an existing Plex playlist in place: rename + set the
+    exact ordered membership. Edits the real playlist so it keeps its rating key
+    (and any history link).
+
+    ``rating_keys`` is the desired ordered track list (deduped like
+    create_playlist). Returns ``(final_title, track_count)``. Raises PlexError.
+    """
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    except (PermissionError, ConnectionError) as exc:
+        raise PlexError(str(exc)) from exc
+
+    playlist = find_playlist(plex, rating_key=rating_key)
+    if playlist is None:
+        raise PlexError("That playlist no longer exists in Plex.")
+
+    final_title = name or playlist.title
+    if name and name != playlist.title:
+        try:
+            playlist.editTitle(name)
+        except plex_exceptions.PlexApiException as exc:
+            raise PlexError(f"Failed to rename playlist: {exc}") from exc
+
+    # Desired unique ordered keys; current items keyed by rating key.
+    desired = list(dict.fromkeys(str(k) for k in rating_keys))
+    current = {str(getattr(it, "ratingKey", "")): it for it in playlist.items()}
+
+    drop = [it for k, it in current.items() if k not in desired]
+    if drop:
+        try:
+            playlist.removeItems(drop)
+        except plex_exceptions.PlexApiException as exc:
+            raise PlexError(f"Failed to remove tracks: {exc}") from exc
+
+    add = []
+    for k in desired:
+        if k not in current:
+            try:
+                add.append(plex.fetchItem(int(k)))
+            except Exception:
+                logger.warning("Could not fetch track %s; skipping.", k)
+    if add:
+        try:
+            playlist.addItems(add)
+        except plex_exceptions.PlexApiException as exc:
+            raise PlexError(f"Failed to add tracks: {exc}") from exc
+
+    # addItems/removeItems don't refresh plexapi's cached items(); reload so the
+    # reorder loop sees the true membership (and playlistItemIDs for new tracks).
+    if drop or add:
+        playlist.reload()
+    # Apply the exact order via moveItem (after=None puts a track first; each
+    # subsequent one lands after the previous) — but only when the current order
+    # differs, so a rename-only save doesn't fire a PUT per track.
+    by_key = {str(getattr(it, "ratingKey", "")): it for it in playlist.items()}
+    if list(by_key) != desired:
+        prev = None
+        for k in desired:
+            item = by_key.get(k)
+            if item is None:
+                continue
+            try:
+                playlist.moveItem(item, after=prev)
+            except plex_exceptions.PlexApiException as exc:
+                raise PlexError(f"Failed to reorder tracks: {exc}") from exc
+            prev = item
+
+    count = sum(1 for k in desired if k in by_key)
+    _update_history_playlist(getattr(playlist, "ratingKey", None),
+                             final_title, count)
+    return final_title, count
 
 
 def backfill_history(config):

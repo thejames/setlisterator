@@ -356,12 +356,24 @@ class _Track:
         self.originalTitle = None
 
 
+class _Album:
+    def __init__(self, title, artist, key, count):
+        self.title = title
+        self.parentTitle = artist
+        self.ratingKey = key
+        self.leafCount = count
+
+
 class _Section:
-    def __init__(self, tracks):
+    def __init__(self, tracks, albums=()):
         self._tracks = tracks
+        self._albums = list(albums)
 
     def searchTracks(self, title=None, maxresults=None):
         return list(self._tracks)
+
+    def searchAlbums(self, title=None, maxresults=None):
+        return list(self._albums)
 
 
 def test_search_returns_json(client, monkeypatch):
@@ -370,8 +382,43 @@ def test_search_returns_json(client, monkeypatch):
     monkeypatch.setattr(core, "get_music_section", lambda plex, lib: section)
     data = client.get("/search?q=jilly").get_json()
     assert data["results"][0] == {
-        "rating_key": 77, "title": "Jilly's on Smack",
+        "type": "track", "rating_key": 77, "title": "Jilly's on Smack",
         "artist": "Primus", "album": "Pork Soda"}
+
+
+def test_search_includes_albums_when_requested(client, monkeypatch):
+    section = _Section(
+        [_Track("Wilson", "Primus", "Junta", 10)],
+        albums=[_Album("Pork Soda", "Primus", 900, 13)])
+    monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
+    monkeypatch.setattr(core, "get_music_section", lambda plex, lib: section)
+
+    # No albums param -> tracks only (album search not offered).
+    plain = client.get("/search?q=pork").get_json()["results"]
+    assert all(r["type"] == "track" for r in plain)
+
+    # albums=1 -> album match first, flagged with type + count.
+    data = client.get("/search?q=pork&albums=1").get_json()["results"]
+    assert data[0] == {"type": "album", "rating_key": 900,
+                       "title": "Pork Soda", "artist": "Primus", "count": 13}
+    assert data[1]["type"] == "track"
+
+
+def test_album_tracks_endpoint(client, monkeypatch):
+    monkeypatch.setattr(core, "get_album_tracks", lambda cfg, key: [
+        {"rating_key": 1, "title": "A", "artist": "Primus", "album": "Pork Soda"},
+        {"rating_key": 2, "title": "B", "artist": "Primus", "album": "Pork Soda"}])
+    data = client.get("/album/900").get_json()
+    assert [t["rating_key"] for t in data["tracks"]] == [1, 2]
+
+
+def test_album_tracks_endpoint_plex_error(client, monkeypatch):
+    def boom(cfg, key):
+        raise core.PlexError("gone")
+    monkeypatch.setattr(core, "get_album_tracks", boom)
+    resp = client.get("/album/900")
+    assert resp.status_code == 502
+    assert "error" in resp.get_json()
 
 
 def test_search_empty_query(client):
@@ -530,7 +577,9 @@ def test_build_creates_playlist(client, monkeypatch):
     })
     assert resp.status_code == 200
     assert captured["keys"] == ["10", "21", "33"]   # order preserved
-    assert captured["meta"] is None                 # nothing recorded to History
+    # Recorded to History under a namespaced manual id so it's badged later.
+    assert captured["meta"]["source"] == "manual"
+    assert captured["meta"]["id"].startswith("manual:")
     assert "Friday mix" in resp.data.decode()
 
 
@@ -551,6 +600,75 @@ def test_build_surfaces_plex_error(client, monkeypatch):
     body = client.post("/build", data={
         "name": "X", "rating_keys": ["10"]}).data.decode()
     assert "Plex down" in body
+
+
+# --- playlists list + in-place editor --------------------------------------
+
+def test_playlists_lists_and_badges(client, monkeypatch):
+    monkeypatch.setattr(core, "list_playlists", lambda cfg: [
+        {"rating_key": 999, "title": "Phish MSG", "count": 12, "app_created": True},
+        {"rating_key": 5, "title": "Road Trip", "count": 40, "app_created": False},
+    ])
+    body = client.get("/playlists").data.decode()
+    assert "Phish MSG" in body and "Road Trip" in body
+    assert body.count(">app<") == 1                  # only the app-created one badged
+    assert "/playlists/999/edit" in body             # edit link present
+
+
+def test_playlist_edit_page_seeds_tracks(client, monkeypatch):
+    monkeypatch.setattr(core, "get_playlist_tracks", lambda cfg, key: {
+        "rating_key": 999, "title": "Phish MSG", "tracks": [
+            {"rating_key": 10, "artist": "Phish", "title": "Wilson", "album": "Junta"},
+            {"rating_key": 11, "artist": "Phish", "title": "Tweezer", "album": "ALO"}]})
+    body = client.get("/playlists/999/edit").data.decode()
+    assert 'value="Phish MSG"' in body               # name prefilled
+    assert "data-build-initial" in body              # seed payload present
+    assert "Wilson" in body and "Tweezer" in body    # track labels seeded
+
+
+def test_playlist_save_calls_core_and_redirects(client, monkeypatch):
+    captured = {}
+
+    def fake_set(cfg, rating_key, name, rating_keys):
+        captured.update(key=rating_key, name=name, keys=rating_keys)
+        return name, len(rating_keys)
+
+    monkeypatch.setattr(core, "set_playlist", fake_set)
+    resp = client.post("/playlists/999/edit", data={
+        "name": "New Name", "rating_keys": ["3", "1", "4"]})
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/playlists")
+    assert captured["key"] == "999"
+    assert captured["keys"] == ["3", "1", "4"]       # order preserved
+
+
+def test_playlist_save_validates(client):
+    assert client.post("/playlists/999/edit",
+                       data={"rating_keys": ["1"]}).status_code == 400   # no name
+    assert client.post("/playlists/999/edit",
+                       data={"name": "X"}).status_code == 400            # no tracks
+
+
+def test_playlist_save_surfaces_plex_error(client, monkeypatch):
+    def boom(cfg, rating_key, name, rating_keys):
+        raise core.PlexError("Plex down")
+    monkeypatch.setattr(core, "set_playlist", boom)
+    body = client.post("/playlists/999/edit", data={
+        "name": "X", "rating_keys": ["1"]}).data.decode()
+    assert "Plex down" in body
+
+
+def test_delete_back_to_playlists(client, monkeypatch):
+    monkeypatch.setattr(core, "delete_playlist", lambda cfg, pid: "X")
+    resp = client.post("/playlist/delete", data={"id": "999", "back": "playlists"})
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/playlists")
+
+
+def test_delete_back_defaults_and_rejects_junk(client, monkeypatch):
+    monkeypatch.setattr(core, "delete_playlist", lambda cfg, pid: "X")
+    resp = client.post("/playlist/delete", data={"id": "999", "back": "evil"})
+    assert resp.headers["Location"].endswith("/history")   # junk falls back to history
 
 
 def test_preview_prefer_album_forwarded_and_rendered(client, monkeypatch):

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Playlists — Setlist-er-ator{% endblock %}
+{% block content %}
+<h2>Playlists ({{ playlists|length }})</h2>
+
+{% if playlists %}
+<div class="panel">
+<table>
+  <tr><th>Name</th><th>Tracks</th><th></th></tr>
+  {% for p in playlists %}
+  <tr>
+    <td>{{ p.title }}
+      {% if p.app_created %}<span class="pill pill-exact">app</span>{% endif %}</td>
+    <td class="sub">{{ p.count if p.count is not none else "—" }}</td>
+    <td>
+      <div class="rowactions">
+        <a href="{{ url_for('playlist_edit', rating_key=p.rating_key) }}"
+           class="icon-btn" title="Edit playlist" aria-label="Edit playlist">
+          {# pencil #}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"></path>
+          </svg>
+        </a>
+        <a href="{{ url_for('playlist_delete_confirm', id=p.rating_key,
+                            name=p.title, back='playlists') }}"
+           class="icon-btn icon-del" title="Delete playlist" aria-label="Delete playlist">
+          {# trash can #}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            <line x1="10" y1="11" x2="10" y2="17"></line>
+            <line x1="14" y1="11" x2="14" y2="17"></line>
+          </svg>
+        </a>
+      </div>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p>No audio playlists found in Plex.</p>
+{% endif %}
+{% endblock %}
