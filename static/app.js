@@ -318,4 +318,44 @@
     cb.addEventListener("change", updateCount);
   });
   updateCount();
+
+  // --- manual build page: search library, accumulate picks, then create -----
+  (function wireBuild() {
+    const scope = document.querySelector("[data-build]");
+    if (!scope) return;                         // only present on /build
+    const chosen = scope.querySelector("#chosen");
+    const q = scope.querySelector(".q");
+    const go = scope.querySelector(".go");
+    const submit = document.querySelector("[data-build-submit]");
+    const picked = new Set();
+
+    function refresh() { if (submit) submit.disabled = picked.size === 0; }
+
+    function addTrack(t, label) {
+      const key = String(t.rating_key);
+      if (picked.has(key)) return;              // dedupe: skip already-chosen
+      picked.add(key);
+      const li = el("li", "chosen-item");
+      const hidden = el("input");
+      hidden.type = "hidden"; hidden.name = "rating_keys"; hidden.value = key;
+      const rm = el("button", "rm", "✕");
+      rm.type = "button";
+      rm.setAttribute("aria-label", "Remove");
+      rm.addEventListener("click", function () {
+        picked.delete(key); li.remove(); refresh();
+      });
+      li.appendChild(hidden);
+      li.appendChild(el("span", "lbl", label));
+      li.appendChild(rm);
+      chosen.appendChild(li);
+      refresh();
+    }
+
+    function run() { doSearch(scope, addTrack); }
+    if (go) go.addEventListener("click", run);
+    if (q) q.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); run(); }
+    });
+    refresh();
+  })();
 })();

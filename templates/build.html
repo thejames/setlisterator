@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Build — Setlist-er-ator{% endblock %}
+{% block content %}
+<div style="max-width:560px;margin:6vh auto 0;">
+  <div class="panel" style="padding:24px 26px">
+    <form method="post" action="{{ url_for('build_create') }}"
+          data-loading="Creating playlist…">
+      <label>Playlist name
+        <input name="name" autofocus required placeholder="My playlist">
+      </label>
+
+      <div data-build>
+        <label style="margin-top:14px">Add tracks from your library
+          <div class="searchrow">
+            <input type="text" class="q" placeholder="search by song title">
+            <button type="button" class="go">Search</button>
+          </div>
+        </label>
+        <div class="results"></div>
+
+        {# picked tracks accumulate here; each row carries a hidden rating_keys input #}
+        <ul id="chosen" class="chosenlist"></ul>
+      </div>
+
+      <button type="submit" class="btn-accent" data-build-submit disabled
+              style="margin-top:12px">Create playlist</button>
+    </form>
+  </div>
+  <p class="hint" style="margin-top:14px;text-align:center">Search your Plex
+    library, add tracks in any order, name it, and create — no setlist needed.
+    Manually-built playlists aren't recorded in History.</p>
+</div>
+{% endblock %}

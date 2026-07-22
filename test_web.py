@@ -506,6 +506,53 @@ def test_create_added_count_is_deduped(client, monkeypatch):
     assert "2 tracks added" in body   # deduped: {10, 21}, not 3
 
 
+# --- build flow (manual, setlist-free) -------------------------------------
+
+def test_build_page_renders(client):
+    body = client.get("/build").data.decode()
+    assert 'data-build' in body               # the search/pick scope
+    assert 'name="name"' in body              # the playlist-name field
+
+
+def test_build_creates_playlist(client, monkeypatch):
+    captured = {}
+
+    def fake_create(cfg, name, rating_keys, history_meta=None):
+        captured["name"] = name
+        captured["keys"] = rating_keys
+        captured["meta"] = history_meta
+        return name
+
+    monkeypatch.setattr(core, "create_playlist", fake_create)
+    resp = client.post("/build", data={
+        "name": "Friday mix",
+        "rating_keys": ["10", "21", "33"],
+    })
+    assert resp.status_code == 200
+    assert captured["keys"] == ["10", "21", "33"]   # order preserved
+    assert captured["meta"] is None                 # nothing recorded to History
+    assert "Friday mix" in resp.data.decode()
+
+
+def test_build_requires_name(client):
+    resp = client.post("/build", data={"rating_keys": ["10"]})
+    assert resp.status_code == 400
+
+
+def test_build_requires_tracks(client):
+    resp = client.post("/build", data={"name": "Empty"})   # no rating_keys
+    assert resp.status_code == 400
+
+
+def test_build_surfaces_plex_error(client, monkeypatch):
+    def boom(cfg, name, rating_keys, history_meta=None):
+        raise core.PlexError("Plex down")
+    monkeypatch.setattr(core, "create_playlist", boom)
+    body = client.post("/build", data={
+        "name": "X", "rating_keys": ["10"]}).data.decode()
+    assert "Plex down" in body
+
+
 def test_preview_prefer_album_forwarded_and_rendered(client, monkeypatch):
     captured = {}
 

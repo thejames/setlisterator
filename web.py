@@ -364,6 +364,37 @@ def playlist_delete():
     return redirect(url_for("history"))
 
 
+@app.get("/build")
+def build_page():
+    """Manual playlist builder: search the library and pick tracks by hand."""
+    return render_template("build.html")
+
+
+@app.post("/build")
+def build_create():
+    """Create a Plex playlist from hand-picked rating keys.
+
+    A setlist-free path: no matching, and (history_meta=None) nothing recorded
+    to History — the playlist lives only in Plex.
+    """
+    name = (request.form.get("name") or "").strip()
+    rating_keys = [k for k in request.form.getlist("rating_keys") if k.strip()]
+    if not name:
+        return _error("Missing name", "A playlist name is required.", 400)
+    if not rating_keys:
+        return _error("Nothing to create", "Add at least one track.", 400)
+    try:
+        config = core.load_config()
+        final_name = core.create_playlist(config, name, rating_keys, history_meta=None)
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    except core.PlexError as exc:
+        return _error("Plex problem", str(exc))
+
+    added = len(dict.fromkeys(rating_keys))
+    return render_template("created.html", name=final_name, added=added, missing=[])
+
+
 def _port():
     """Web server port: PORT env/.env, else 5001 (5000 is AirPlay on macOS)."""
     return int(os.environ.get("PORT", "5001"))
