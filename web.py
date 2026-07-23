@@ -369,15 +369,17 @@ def playlist_delete_confirm():
     playlist_id = (request.args.get("id") or "").strip()
     if not playlist_id:
         return _error("Nothing to delete", "No playlist was specified.", 400)
+    back = _delete_back(request.args.get("back"))
     return render_template("confirm_delete.html", playlist_id=playlist_id,
-                           name=request.args.get("name", ""),
-                           back=_delete_back(request.args.get("back")))
+                           name=request.args.get("name", ""), back=back,
+                           view=_back_view(back, request.args.get("view")))
 
 
 @app.post("/playlist/delete")
 def playlist_delete():
     """Delete the Plex playlist (and drop its history entry), then return to the
-    page the delete was launched from (History by default, Playlists otherwise)."""
+    page the delete was launched from (History by default, Playlists otherwise),
+    restoring the Playlists view filter if one was active."""
     playlist_id = (request.form.get("id") or "").strip()
     back = _delete_back(request.form.get("back"))
     if not playlist_id:
@@ -389,12 +391,25 @@ def playlist_delete():
         return _error("Configuration needed", str(exc))
     except core.PlexError as exc:
         return _error("Couldn't delete playlist", str(exc))
-    return redirect(url_for(back))
+    return redirect(url_for(back, view=_back_view(back, request.form.get("view"))))
 
 
 def _delete_back(value):
     """Whitelist the post-delete redirect target (avoids url_for on junk)."""
     return value if value in ("history", "playlists") else "history"
+
+
+def _playlists_view(value):
+    """Whitelist the Playlists page filter (?view=): concerts (setlist-made),
+    built (Build page), other (not ours), or all."""
+    return value if value in ("concerts", "built", "other") else "all"
+
+
+def _back_view(back, value):
+    """Playlists filter to restore after a delete round-trip; None (i.e. no
+    query param) unless returning to Playlists with a narrowed view."""
+    view = _playlists_view(value)
+    return view if back == "playlists" and view != "all" else None
 
 
 @app.get("/build")
@@ -434,7 +449,14 @@ def build_create():
 
 @app.get("/playlists")
 def playlists():
-    """List the Plex audio playlists, badging the ones this app created."""
+    """List the Plex audio playlists, badging the ones this app created.
+
+    ``?view=concerts|built|other`` narrows the list to setlist-derived,
+    Build-page, or non-app playlists; absent (or junk) shows everything.
+    Counts for every view are passed so the filter chips can show what each
+    hides.
+    """
+    view = _playlists_view(request.args.get("view"))
     try:
         config = core.load_config()
         rows = core.list_playlists(config)
@@ -442,7 +464,18 @@ def playlists():
         return _error("Configuration needed", str(exc))
     except core.PlexError as exc:
         return _error("Plex problem", str(exc))
-    return render_template("playlists.html", playlists=rows)
+    counts = {"all": len(rows),
+              "concerts": sum(1 for r in rows if r["source"] == "setlist"),
+              "built": sum(1 for r in rows if r["source"] == "manual"),
+              "other": sum(1 for r in rows if not r["app_created"])}
+    if view == "concerts":
+        rows = [r for r in rows if r["source"] == "setlist"]
+    elif view == "built":
+        rows = [r for r in rows if r["source"] == "manual"]
+    elif view == "other":
+        rows = [r for r in rows if not r["app_created"]]
+    return render_template("playlists.html", playlists=rows, view=view,
+                           counts=counts)
 
 
 @app.get("/playlists/<rating_key>/edit")

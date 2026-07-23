@@ -604,15 +604,53 @@ def test_build_surfaces_plex_error(client, monkeypatch):
 
 # --- playlists list + in-place editor --------------------------------------
 
+def _playlists_rows():
+    return [
+        {"rating_key": 999, "title": "Phish MSG", "count": 12,
+         "app_created": True, "source": "setlist"},
+        {"rating_key": 7, "title": "Mixtape", "count": 9,
+         "app_created": True, "source": "manual"},
+        {"rating_key": 5, "title": "Road Trip", "count": 40,
+         "app_created": False, "source": None},
+    ]
+
+
 def test_playlists_lists_and_badges(client, monkeypatch):
-    monkeypatch.setattr(core, "list_playlists", lambda cfg: [
-        {"rating_key": 999, "title": "Phish MSG", "count": 12, "app_created": True},
-        {"rating_key": 5, "title": "Road Trip", "count": 40, "app_created": False},
-    ])
+    monkeypatch.setattr(core, "list_playlists", lambda cfg: _playlists_rows())
     body = client.get("/playlists").data.decode()
-    assert "Phish MSG" in body and "Road Trip" in body
-    assert body.count(">app<") == 1                  # only the app-created one badged
+    assert "Phish MSG" in body and "Mixtape" in body and "Road Trip" in body
+    # badge pills (not the filter chips, whose labels overlap these words)
+    assert body.count('pill-exact">concert<') == 1   # setlist-made playlist
+    assert body.count('pill-multi">built<') == 1     # Build-page playlist
     assert "/playlists/999/edit" in body             # edit link present
+
+
+def test_playlists_view_filters_rows(client, monkeypatch):
+    monkeypatch.setattr(core, "list_playlists", lambda cfg: _playlists_rows())
+    body = client.get("/playlists?view=concerts").data.decode()
+    assert "Phish MSG" in body
+    assert "Mixtape" not in body and "Road Trip" not in body
+    body = client.get("/playlists?view=built").data.decode()
+    assert "Mixtape" in body
+    assert "Phish MSG" not in body and "Road Trip" not in body
+    body = client.get("/playlists?view=other").data.decode()
+    assert "Road Trip" in body
+    assert "Phish MSG" not in body and "Mixtape" not in body
+
+
+def test_playlists_view_junk_shows_all(client, monkeypatch):
+    monkeypatch.setattr(core, "list_playlists", lambda cfg: _playlists_rows())
+    body = client.get("/playlists?view=evil").data.decode()
+    assert "Phish MSG" in body and "Mixtape" in body and "Road Trip" in body
+
+
+def test_playlists_filter_chips_count_all_views(client, monkeypatch):
+    monkeypatch.setattr(core, "list_playlists", lambda cfg: _playlists_rows())
+    body = client.get("/playlists?view=concerts").data.decode()
+    assert ">concerts<" in body and ">built<" in body   # chip labels present
+    assert "view=built" in body and "view=other" in body  # sibling view links
+    # delete link carries the active view so the round-trip restores it
+    assert "back=playlists" in body and "view=concerts" in body
 
 
 def test_playlist_edit_page_seeds_tracks(client, monkeypatch):
@@ -669,6 +707,28 @@ def test_delete_back_defaults_and_rejects_junk(client, monkeypatch):
     monkeypatch.setattr(core, "delete_playlist", lambda cfg, pid: "X")
     resp = client.post("/playlist/delete", data={"id": "999", "back": "evil"})
     assert resp.headers["Location"].endswith("/history")   # junk falls back to history
+
+
+def test_delete_confirm_carries_back_and_view(client):
+    body = client.get(
+        "/playlist/delete?id=999&back=playlists&view=concerts").data.decode()
+    assert 'name="back" value="playlists"' in body
+    assert 'name="view" value="concerts"' in body
+    assert "/playlists?view=concerts" in body   # Cancel returns to filtered view
+
+
+def test_delete_returns_to_filtered_playlists(client, monkeypatch):
+    monkeypatch.setattr(core, "delete_playlist", lambda cfg, pid: "X")
+    resp = client.post("/playlist/delete",
+                       data={"id": "999", "back": "playlists", "view": "concerts"})
+    assert resp.headers["Location"].endswith("/playlists?view=concerts")
+
+
+def test_delete_view_ignored_off_playlists(client, monkeypatch):
+    monkeypatch.setattr(core, "delete_playlist", lambda cfg, pid: "X")
+    resp = client.post("/playlist/delete",
+                       data={"id": "999", "back": "history", "view": "concerts"})
+    assert resp.headers["Location"].endswith("/history")   # no stray ?view=
 
 
 def test_preview_prefer_album_forwarded_and_rendered(client, monkeypatch):

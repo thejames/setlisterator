@@ -122,6 +122,11 @@
     /* Clickable category chips: highlight their rows in the table below. */
     .chip[data-chip-filter], .chip[data-chip-clear] { cursor: pointer; }
     .chip[data-chip-filter]:hover, .chip[data-chip-clear]:hover { border-color: var(--border2); }
+    /* Chips as links (Playlists view filter): plain chips get an accent
+       active state; colour-variant rules below still win for e.g. .exact. */
+    a.chip { text-decoration: none; }
+    a.chip:hover { border-color: var(--border2); }
+    a.chip.active { border-color: var(--accent); background: #E0A33C14; }
     .chip.exact.active   { border-color: var(--green);  background: #5BB98B14; }
     .chip.fuzzy.active   { border-color: var(--accent); background: #E0A33C14; }
     .chip.multi.active   { border-color: var(--blue);   background: #6E9BF014; }

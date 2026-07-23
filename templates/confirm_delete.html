@@ -8,10 +8,14 @@
     will be permanently removed from Plex and dropped from your history.</p>
   <p class="hint" style="margin-bottom:24px">This can't be undone.</p>
   <div style="display:flex;gap:12px;justify-content:center">
-    <a href="{{ url_for('history') }}"><button type="button" class="btn-ghost">Cancel</button></a>
+    {# Cancel and the post-delete redirect both honor where the delete was
+       launched from, restoring the Playlists view filter when one was set. #}
+    <a href="{{ url_for(back, view=view) }}"><button type="button" class="btn-ghost">Cancel</button></a>
     <form method="post" action="{{ url_for('playlist_delete') }}" style="margin:0"
           data-loading="Deleting…">
       <input type="hidden" name="id" value="{{ playlist_id }}">
+      <input type="hidden" name="back" value="{{ back }}">
+      {% if view %}<input type="hidden" name="view" value="{{ view }}">{% endif %}
       <button type="submit" class="btn-accent" style="background:var(--red);box-shadow:none">
         Delete permanently</button>
     </form>

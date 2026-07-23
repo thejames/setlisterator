@@ -1204,19 +1204,29 @@ def test_delete_playlist_leaves_unrelated_history(monkeypatch, tmp_path):
 def test_list_playlists_flags_app_created(monkeypatch, tmp_path):
     pls = [_FakePlaylistObj("Zzz Mix", rating_key=5,
                             items=[_FakeTrack("a", "x", rating_key=1)]),
+           _FakePlaylistObj("Mmm Built", rating_key=7,
+                            items=[_FakeTrack("d", "z", rating_key=4)]),
            _FakePlaylistObj("Aaa Show", rating_key=999,
                             items=[_FakeTrack("b", "y", rating_key=2),
                                    _FakeTrack("c", "y", rating_key=3)])]
     monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex(pls))
     hist = tmp_path / "history.json"
     monkeypatch.setattr(m, "history_path", lambda: hist)
-    m.save_history(hist, {"abc": {"id": "abc", "playlist_rating_key": 999}})
+    m.save_history(hist, {
+        # legacy entry without "source" → treated as a setlist creation
+        "abc": {"id": "abc", "playlist_rating_key": 999},
+        "manual:x": {"id": "manual:x", "playlist_rating_key": 7,
+                     "source": "manual"},
+    })
 
     rows = m.list_playlists(_CONFIG)
 
-    assert [r["title"] for r in rows] == ["Aaa Show", "Zzz Mix"]   # sorted by title
+    assert [r["title"] for r in rows] == ["Aaa Show", "Mmm Built", "Zzz Mix"]
     assert rows[0]["app_created"] is True and rows[0]["count"] == 2  # in history
-    assert rows[1]["app_created"] is False                          # not in history
+    assert rows[0]["source"] == "setlist"           # legacy entry defaults
+    assert rows[1]["source"] == "manual"            # Build-page playlist
+    assert rows[2]["app_created"] is False          # not in history
+    assert rows[2]["source"] is None
 
 
 def test_get_playlist_tracks_returns_rows(monkeypatch):
