@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}History — Setlist-er-ator{% endblock %}
+{% block title %}Concerts — Setlist-er-ator{% endblock %}
 {% block content %}
-<h2>History ({{ entries|length }})</h2>
+<h2>Concerts ({{ entries|length }})</h2>
 
 {% if entries %}
 <div class="panel">
@@ -76,7 +76,7 @@
 </table>
 </div>
 {% else %}
-<p>No history yet — <a href="{{ url_for('index') }}">create a playlist</a> and
+<p>No concerts yet — <a href="{{ url_for('index') }}">create a playlist</a> and
   it'll show up here.</p>
 {% endif %}
 {% endblock %}

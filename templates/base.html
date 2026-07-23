@@ -44,7 +44,7 @@
       color: var(--muted); }
     .navlinks a { color: var(--muted); }
     .navlinks a:hover { color: var(--text); text-decoration: none; }
-    /* "New" dropdown: from setlist / manually */
+    /* Nav dropdowns ("New", "History") */
     .navdrop { position: relative; display: inline-flex; }
     .navdrop-btn { background: none; border: none; padding: 0; cursor: pointer;
       font: inherit; font-weight: 600; color: var(--muted);
@@ -388,9 +388,16 @@
             <a href="{{ url_for('build_page') }}">manually</a>
           </div>
         </span>
-        <a href="{{ url_for('playlists') }}">Playlists</a>
+        <span class="navdrop" data-navdrop>
+          <button type="button" class="navdrop-btn" data-navdrop-toggle
+                  aria-expanded="false" aria-haspopup="true">History
+            <span class="navdrop-caret">▾</span></button>
+          <div class="navdrop-menu" hidden>
+            <a href="{{ url_for('history') }}">Concerts</a>
+            <a href="{{ url_for('playlists') }}">Playlists</a>
+          </div>
+        </span>
         <a href="{{ url_for('attended') }}">Attended</a>
-        <a href="{{ url_for('history') }}">History</a>
         <a href="{{ url_for('buylist') }}">Buy list</a>
       </span>
     </nav>

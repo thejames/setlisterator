@@ -140,7 +140,7 @@ def test_history_lists_entries_newest_first(client, monkeypatch):
 def test_history_empty(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {})
     body = client.get("/history").data.decode()
-    assert "No history yet" in body
+    assert "No concerts yet" in body
 
 
 # --- delete flow -----------------------------------------------------------

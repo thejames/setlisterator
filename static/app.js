@@ -223,13 +223,18 @@
     });
   });
 
-  // Nav "New" dropdown (from setlist / manually): click to toggle, click-away closes.
+  // Nav dropdowns ("New", "History"): click to toggle, click-away closes.
+  // Opening one closes any other (stopPropagation skips the click-away).
   document.querySelectorAll("[data-navdrop-toggle]").forEach(function (btn) {
     const menu = btn.parentElement.querySelector(".navdrop-menu");
     if (!menu) return;
     btn.addEventListener("click", function (e) {
       e.stopPropagation();
       const opening = menu.hidden;
+      document.querySelectorAll(".navdrop-menu").forEach(function (m) { m.hidden = true; });
+      document.querySelectorAll("[data-navdrop-toggle]").forEach(function (b) {
+        b.setAttribute("aria-expanded", "false");
+      });
       menu.hidden = !opening;
       btn.setAttribute("aria-expanded", String(opening));
     });
