@@ -175,6 +175,7 @@ def search():
         "title": t.title,
         "artist": core._track_artist_name(t),
         "album": core._track_album(t),
+        "rating": getattr(t, "userRating", None),   # Plex stars, 0–10 or None
     } for t in tracks]
     return jsonify(results=results)
 
@@ -192,35 +193,73 @@ def album_tracks(rating_key):
     return jsonify(tracks=tracks)
 
 
-@app.post("/preview")
-def preview():
-    """Match the setlist and show the result without creating anything."""
-    setlist_arg = (request.form.get("setlist") or "").strip()
-    name = (request.form.get("name") or "").strip() or None
-    # Absent (first preview) -> None -> auto-detect a cohesive album; present
-    # (incl. "" for "No preference") -> use it verbatim.
-    prefer_album = request.form.get("prefer_album")
-    if not setlist_arg:
-        return _error("Missing input", "Enter a setlist.fm URL or ID.", 400)
+def _parse_and_match(req):
+    """Shared read+match preamble for /preview and /rematch.
 
+    Parses the form, runs `gather_matches`, and classifies any failure. Returns
+    `(result, err)` where `err` is None on success or a `(kind, message)` pair —
+    the caller renders whichever shape (HTML error page vs JSON) its route needs.
+    `prefer_album` absent (first preview) -> None -> auto-detect a cohesive
+    album; present (incl. "" for "No preference") -> used verbatim.
+    """
+    setlist_arg = (req.form.get("setlist") or "").strip()
+    name = (req.form.get("name") or "").strip() or None
+    prefer_album = req.form.get("prefer_album")
+    if not setlist_arg:
+        return None, ("input", "Enter a setlist.fm URL or ID.")
     try:
         config = core.load_config()
         setlist_id = core.parse_setlist_id(setlist_arg)
-        result = core.gather_matches(config, setlist_id, name, prefer_album)
+        return core.gather_matches(config, setlist_id, name, prefer_album), None
     except core.ConfigError as exc:
-        return _error("Configuration needed", str(exc))
+        return None, ("config", str(exc))
     except ValueError as exc:
-        return _error("Couldn't read that setlist", str(exc), 400)
+        return None, ("value", str(exc))
     except core.SetlistError as exc:
-        return _error("Setlist problem", str(exc))
+        return None, ("setlist", str(exc))
     except core.PlexError as exc:
-        return _error("Plex problem", str(exc))
+        return None, ("plex", str(exc))
+
+
+@app.post("/preview")
+def preview():
+    """Match the setlist and show the result without creating anything."""
+    result, err = _parse_and_match(request)
+    if err:
+        kind, msg = err
+        titles = {"input": ("Missing input", 400),
+                  "config": ("Configuration needed", 200),
+                  "value": ("Couldn't read that setlist", 400),
+                  "setlist": ("Setlist problem", 200),
+                  "plex": ("Plex problem", 200)}
+        title, status = titles[kind]
+        return _error(title, msg, status)
 
     prior = core.load_history(core.history_path()).get(result["setlist_id"])
     return render_template(
         "preview.html", result=result, prior=prior, stats=_stats(result),
         missing_json=json.dumps(result["missing"]),
         fuzzy_json=json.dumps(result["fuzzy"]))
+
+
+@app.post("/rematch")
+def rematch():
+    """Re-match a setlist for a newly chosen preferred album, as JSON.
+
+    Backs the preview page's in-place "Prefer album" switch: it returns the
+    fresh per-song candidates so the client can re-order only the *untouched*
+    rows, leaving the user's touched selections sticky (see
+    docs/adr/0001-client-rematch-endpoint.md). This runs the same full match as
+    /preview — the candidate *set* per song is invariant across album choices;
+    only the ordering (hence the default pick) changes.
+    """
+    result, err = _parse_and_match(request)
+    if err:
+        kind, msg = err
+        status = 400 if kind in ("input", "config", "value") else 502
+        return jsonify(error=msg), status
+    return jsonify(songs=result["songs"],
+                   preferred_album=result.get("preferred_album", ""))
 
 
 @app.post("/create")
@@ -369,15 +408,17 @@ def playlist_delete_confirm():
     playlist_id = (request.args.get("id") or "").strip()
     if not playlist_id:
         return _error("Nothing to delete", "No playlist was specified.", 400)
+    back = _delete_back(request.args.get("back"))
     return render_template("confirm_delete.html", playlist_id=playlist_id,
-                           name=request.args.get("name", ""),
-                           back=_delete_back(request.args.get("back")))
+                           name=request.args.get("name", ""), back=back,
+                           view=_back_view(back, request.args.get("view")))
 
 
 @app.post("/playlist/delete")
 def playlist_delete():
     """Delete the Plex playlist (and drop its history entry), then return to the
-    page the delete was launched from (History by default, Playlists otherwise)."""
+    page the delete was launched from (History by default, Playlists otherwise),
+    restoring the Playlists view filter if one was active."""
     playlist_id = (request.form.get("id") or "").strip()
     back = _delete_back(request.form.get("back"))
     if not playlist_id:
@@ -389,12 +430,25 @@ def playlist_delete():
         return _error("Configuration needed", str(exc))
     except core.PlexError as exc:
         return _error("Couldn't delete playlist", str(exc))
-    return redirect(url_for(back))
+    return redirect(url_for(back, view=_back_view(back, request.form.get("view"))))
 
 
 def _delete_back(value):
     """Whitelist the post-delete redirect target (avoids url_for on junk)."""
     return value if value in ("history", "playlists") else "history"
+
+
+def _playlists_view(value):
+    """Whitelist the Playlists page filter (?view=): concerts (setlist-made),
+    built (Build page), other (not ours), or all."""
+    return value if value in ("concerts", "built", "other") else "all"
+
+
+def _back_view(back, value):
+    """Playlists filter to restore after a delete round-trip; None (i.e. no
+    query param) unless returning to Playlists with a narrowed view."""
+    view = _playlists_view(value)
+    return view if back == "playlists" and view != "all" else None
 
 
 @app.get("/build")
@@ -434,7 +488,14 @@ def build_create():
 
 @app.get("/playlists")
 def playlists():
-    """List the Plex audio playlists, badging the ones this app created."""
+    """List the Plex audio playlists, badging the ones this app created.
+
+    ``?view=concerts|built|other`` narrows the list to setlist-derived,
+    Build-page, or non-app playlists; absent (or junk) shows everything.
+    Counts for every view are passed so the filter chips can show what each
+    hides.
+    """
+    view = _playlists_view(request.args.get("view"))
     try:
         config = core.load_config()
         rows = core.list_playlists(config)
@@ -442,7 +503,18 @@ def playlists():
         return _error("Configuration needed", str(exc))
     except core.PlexError as exc:
         return _error("Plex problem", str(exc))
-    return render_template("playlists.html", playlists=rows)
+    counts = {"all": len(rows),
+              "concerts": sum(1 for r in rows if r["source"] == "setlist"),
+              "built": sum(1 for r in rows if r["source"] == "manual"),
+              "other": sum(1 for r in rows if not r["app_created"])}
+    if view == "concerts":
+        rows = [r for r in rows if r["source"] == "setlist"]
+    elif view == "built":
+        rows = [r for r in rows if r["source"] == "manual"]
+    elif view == "other":
+        rows = [r for r in rows if not r["app_created"]]
+    return render_template("playlists.html", playlists=rows, view=view,
+                           counts=counts)
 
 
 @app.get("/playlists/<rating_key>/edit")

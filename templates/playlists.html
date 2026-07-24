@@ -3,6 +3,22 @@
 {% block content %}
 <h2>Playlists ({{ playlists|length }})</h2>
 
+{% if counts.all %}
+{# View filter: link-chips reload the page with ?view=; counts show what each
+   view holds. Concerts borrows the green "exact" accent, built the blue
+   "multi" one — same colours as the row pills below. #}
+<div class="chips" role="group" aria-label="Filter playlists">
+  <a class="chip{{ ' active' if view == 'all' }}"
+     href="{{ url_for('playlists') }}"><b>{{ counts.all }}</b><span>all</span></a>
+  <a class="chip exact{{ ' active' if view == 'concerts' }}"
+     href="{{ url_for('playlists', view='concerts') }}"><b>{{ counts.concerts }}</b><span>concerts</span></a>
+  <a class="chip multi{{ ' active' if view == 'built' }}"
+     href="{{ url_for('playlists', view='built') }}"><b>{{ counts.built }}</b><span>built</span></a>
+  <a class="chip{{ ' active' if view == 'other' }}"
+     href="{{ url_for('playlists', view='other') }}"><b>{{ counts.other }}</b><span>other</span></a>
+</div>
+{% endif %}
+
 {% if playlists %}
 <div class="panel">
 <table>
@@ -10,7 +26,8 @@
   {% for p in playlists %}
   <tr>
     <td>{{ p.title }}
-      {% if p.app_created %}<span class="pill pill-exact">app</span>{% endif %}</td>
+      {% if p.source == 'manual' %}<span class="pill pill-multi">built</span>
+      {%- elif p.app_created %}<span class="pill pill-exact">concert</span>{% endif %}</td>
     <td class="sub">{{ p.count if p.count is not none else "—" }}</td>
     <td>
       <div class="rowactions">
@@ -24,7 +41,8 @@
           </svg>
         </a>
         <a href="{{ url_for('playlist_delete_confirm', id=p.rating_key,
-                            name=p.title, back='playlists') }}"
+                            name=p.title, back='playlists',
+                            view=(view if view != 'all' else none)) }}"
            class="icon-btn icon-del" title="Delete playlist" aria-label="Delete playlist">
           {# trash can #}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -42,6 +60,9 @@
 </table>
 </div>
 {% else %}
-<p>No audio playlists found in Plex.</p>
+<p>{% if view == 'concerts' %}No concert playlists yet.
+   {%- elif view == 'built' %}No hand-built playlists yet.
+   {%- elif view == 'other' %}No other playlists.
+   {%- else %}No audio playlists found in Plex.{% endif %}</p>
 {% endif %}
 {% endblock %}

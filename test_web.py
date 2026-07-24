@@ -140,7 +140,7 @@ def test_history_lists_entries_newest_first(client, monkeypatch):
 def test_history_empty(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {})
     body = client.get("/history").data.decode()
-    assert "No history yet" in body
+    assert "No concerts yet" in body
 
 
 # --- delete flow -----------------------------------------------------------
@@ -348,12 +348,13 @@ def test_preview_missing_row_has_search_ui(client, monkeypatch):
 # --- /search (manual override JSON endpoint) -------------------------------
 
 class _Track:
-    def __init__(self, title, artist, album, key):
+    def __init__(self, title, artist, album, key, rating=None):
         self.title = title
         self.grandparentTitle = artist
         self.parentTitle = album
         self.ratingKey = key
         self.originalTitle = None
+        self.userRating = rating
 
 
 class _Album:
@@ -377,13 +378,14 @@ class _Section:
 
 
 def test_search_returns_json(client, monkeypatch):
-    section = _Section([_Track("Jilly's on Smack", "Primus", "Pork Soda", 77)])
+    section = _Section([_Track("Jilly's on Smack", "Primus", "Pork Soda", 77,
+                               rating=8.0)])
     monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
     monkeypatch.setattr(core, "get_music_section", lambda plex, lib: section)
     data = client.get("/search?q=jilly").get_json()
     assert data["results"][0] == {
         "type": "track", "rating_key": 77, "title": "Jilly's on Smack",
-        "artist": "Primus", "album": "Pork Soda"}
+        "artist": "Primus", "album": "Pork Soda", "rating": 8.0}
 
 
 def test_search_includes_albums_when_requested(client, monkeypatch):
@@ -604,15 +606,53 @@ def test_build_surfaces_plex_error(client, monkeypatch):
 
 # --- playlists list + in-place editor --------------------------------------
 
+def _playlists_rows():
+    return [
+        {"rating_key": 999, "title": "Phish MSG", "count": 12,
+         "app_created": True, "source": "setlist"},
+        {"rating_key": 7, "title": "Mixtape", "count": 9,
+         "app_created": True, "source": "manual"},
+        {"rating_key": 5, "title": "Road Trip", "count": 40,
+         "app_created": False, "source": None},
+    ]
+
+
 def test_playlists_lists_and_badges(client, monkeypatch):
-    monkeypatch.setattr(core, "list_playlists", lambda cfg: [
-        {"rating_key": 999, "title": "Phish MSG", "count": 12, "app_created": True},
-        {"rating_key": 5, "title": "Road Trip", "count": 40, "app_created": False},
-    ])
+    monkeypatch.setattr(core, "list_playlists", lambda cfg: _playlists_rows())
     body = client.get("/playlists").data.decode()
-    assert "Phish MSG" in body and "Road Trip" in body
-    assert body.count(">app<") == 1                  # only the app-created one badged
+    assert "Phish MSG" in body and "Mixtape" in body and "Road Trip" in body
+    # badge pills (not the filter chips, whose labels overlap these words)
+    assert body.count('pill-exact">concert<') == 1   # setlist-made playlist
+    assert body.count('pill-multi">built<') == 1     # Build-page playlist
     assert "/playlists/999/edit" in body             # edit link present
+
+
+def test_playlists_view_filters_rows(client, monkeypatch):
+    monkeypatch.setattr(core, "list_playlists", lambda cfg: _playlists_rows())
+    body = client.get("/playlists?view=concerts").data.decode()
+    assert "Phish MSG" in body
+    assert "Mixtape" not in body and "Road Trip" not in body
+    body = client.get("/playlists?view=built").data.decode()
+    assert "Mixtape" in body
+    assert "Phish MSG" not in body and "Road Trip" not in body
+    body = client.get("/playlists?view=other").data.decode()
+    assert "Road Trip" in body
+    assert "Phish MSG" not in body and "Mixtape" not in body
+
+
+def test_playlists_view_junk_shows_all(client, monkeypatch):
+    monkeypatch.setattr(core, "list_playlists", lambda cfg: _playlists_rows())
+    body = client.get("/playlists?view=evil").data.decode()
+    assert "Phish MSG" in body and "Mixtape" in body and "Road Trip" in body
+
+
+def test_playlists_filter_chips_count_all_views(client, monkeypatch):
+    monkeypatch.setattr(core, "list_playlists", lambda cfg: _playlists_rows())
+    body = client.get("/playlists?view=concerts").data.decode()
+    assert ">concerts<" in body and ">built<" in body   # chip labels present
+    assert "view=built" in body and "view=other" in body  # sibling view links
+    # delete link carries the active view so the round-trip restores it
+    assert "back=playlists" in body and "view=concerts" in body
 
 
 def test_playlist_edit_page_seeds_tracks(client, monkeypatch):
@@ -671,6 +711,28 @@ def test_delete_back_defaults_and_rejects_junk(client, monkeypatch):
     assert resp.headers["Location"].endswith("/history")   # junk falls back to history
 
 
+def test_delete_confirm_carries_back_and_view(client):
+    body = client.get(
+        "/playlist/delete?id=999&back=playlists&view=concerts").data.decode()
+    assert 'name="back" value="playlists"' in body
+    assert 'name="view" value="concerts"' in body
+    assert "/playlists?view=concerts" in body   # Cancel returns to filtered view
+
+
+def test_delete_returns_to_filtered_playlists(client, monkeypatch):
+    monkeypatch.setattr(core, "delete_playlist", lambda cfg, pid: "X")
+    resp = client.post("/playlist/delete",
+                       data={"id": "999", "back": "playlists", "view": "concerts"})
+    assert resp.headers["Location"].endswith("/playlists?view=concerts")
+
+
+def test_delete_view_ignored_off_playlists(client, monkeypatch):
+    monkeypatch.setattr(core, "delete_playlist", lambda cfg, pid: "X")
+    resp = client.post("/playlist/delete",
+                       data={"id": "999", "back": "history", "view": "concerts"})
+    assert resp.headers["Location"].endswith("/history")   # no stray ?view=
+
+
 def test_preview_prefer_album_forwarded_and_rendered(client, monkeypatch):
     captured = {}
 
@@ -704,6 +766,41 @@ def test_preview_first_load_auto_detects_album(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {})
     client.post("/preview", data={"setlist": "abc"})
     assert captured["prefer_album"] is None
+
+
+def test_rematch_returns_songs_json(client, monkeypatch):
+    # The in-place album switch re-matches via /rematch and gets JSON back:
+    # every song, with its full candidate list, so the client can re-order
+    # untouched rows without a page reload.
+    captured = {}
+
+    def fake_gather(cfg, sid, name=None, prefer_album=None):
+        captured["prefer_album"] = prefer_album
+        captured["sid"] = sid
+        result = _preview_result()
+        result["preferred_album"] = "Suck on This (Live)"
+        return result
+
+    monkeypatch.setattr(core, "gather_matches", fake_gather)
+    resp = client.post("/rematch", data={
+        "setlist": "abc123", "name": "Primus",
+        "prefer_album": "Suck on This (Live)"})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert captured["prefer_album"] == "Suck on This (Live)"  # forwarded to core
+    assert captured["sid"] == "abc123"                        # parsed bare id
+    assert data["preferred_album"] == "Suck on This (Live)"
+    assert [s["position"] for s in data["songs"]] == [1, 2, 3]
+    # the multi-match song carries every candidate for the client re-order
+    jerry = next(s for s in data["songs"] if s["position"] == 2)
+    assert len(jerry["candidates"]) == 2
+    assert {c["rating_key"] for c in jerry["candidates"]} == {20, 21}
+
+
+def test_rematch_requires_input(client):
+    resp = client.post("/rematch", data={"prefer_album": ""})
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]
 
 
 # --- /attended (browse a user's "I was there" shows) -----------------------

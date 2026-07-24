@@ -181,12 +181,14 @@
   {% endif %}
 
   {% set fuzzy_rows = result.matched | selectattr('quality', 'equalto', 'fuzzy') | list %}
-  {% if fuzzy_rows %}
+  {# Always rendered (hidden when empty) so an album switch can add/remove
+     fuzzy cards in place for untouched rows — see app.js rematchAlbum(). #}
+  <div data-fuzzy-section{% if not fuzzy_rows %} hidden{% endif %}>
   <div class="section-head">
     <span class="dot amber"></span><span class="t">Fuzzy matches</span>
     <span class="s">need your confirmation</span>
   </div>
-  <div class="cards">
+  <div class="cards" data-fuzzy-cards>
     {% for f in fuzzy_rows %}
     <div class="card card-fuzzy fuzzycard" data-fcard="{{ f.position }}">
       <div style="min-width:0">
@@ -206,7 +208,7 @@
     </div>
     {% endfor %}
   </div>
-  {% endif %}
+  </div>
 
   {% if result.missing %}
   <div class="section-head">

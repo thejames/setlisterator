@@ -35,7 +35,7 @@ Web app defaults to port **5001** (macOS uses 5000 for AirPlay); override with `
 2. `create_playlist(config, name, rating_keys, ...)` — the only thing that mutates Plex. Takes already-chosen Plex `rating_key`s, calls `plex.createPlaylist`, records history. Nothing is re-matched here.
 3. `add_to_playlist(...)` — the "Update" path; add-only top-up of an existing playlist (`playlist.addItems`).
 
-The load-bearing hand-off between stages is the Plex **`rating_key`** (an integer). It's the universal track identifier threaded through the match IR, the history JSON, and both frontends' form fields (`web._picked_rating_keys`). The web flow is: `/preview` renders candidates → user picks versions → `/create` rebuilds tracks *by rating key* with no re-matching.
+The load-bearing hand-off between stages is the Plex **`rating_key`** (an integer). It's the universal track identifier threaded through the match IR, the history JSON, and both frontends' form fields (`web._picked_rating_keys`). The web flow is: `/preview` renders candidates → user picks versions → `/create` rebuilds tracks *by rating key* with no re-matching. Switching the preferred album on the preview page hits `/rematch` (JSON, same `gather_matches`) and the client re-orders only *untouched* rows in place, so hand-edits survive — see `docs/adr/0001-client-rematch-endpoint.md`.
 
 **The matcher is the most substantial and valuable code** (roughly the middle third of `setlist_to_plex.py`). Two-tier strategy:
 1. **Artist-scoped (primary)** — resolve the setlist artist once, pull *all* their Plex tracks, compare locally. Deliberately sidesteps Plex's search tokenizer, which misses tracks over punctuation/Unicode quirks and result truncation.
@@ -55,3 +55,17 @@ Titles compare via `normalize_simple` / `normalize_aggressive` across four ranke
 - **Tests are network-free by design.** `test_setlist_to_plex.py` covers pure logic and the matcher; `test_web.py` monkeypatches `core.load_config` / `gather_matches` / `create_playlist` to exercise routing and rendering only. Keep new tests offline the same way. There's no lint step.
 - The web app is **local-only and unauthenticated** — it holds your Plex token and binds to `127.0.0.1`. Don't add anything that assumes it's safely network-exposed.
 - Version is CalVer (`YYYY.M.PATCH` in `pyproject.toml`); commits follow conventional-commit style.
+
+## Agent skills
+
+### Issue tracker
+
+Local markdown — issues and specs live as files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles, recorded as the `Status:` line in each issue file (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (created lazily by `/domain-modeling`). See `docs/agents/domain.md`.

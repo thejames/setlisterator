@@ -1322,21 +1322,26 @@ def delete_playlist(config, playlist_id):
 
 
 def list_playlists(config):
-    """List Plex audio playlists, flagging which this app created.
+    """List Plex audio playlists, flagging which this app created and how.
 
-    A playlist is "app-created" if its rating key appears in our history store
-    (setlist, Update, or Build creations). Returns dicts sorted by title:
-    ``{rating_key, title, count, app_created}`` (``count`` from ``leafCount``,
-    so no per-playlist items() call). Raises PlexError on connect failure.
+    A playlist is "app-created" if its rating key appears in our history
+    store; ``source`` says how — "setlist" for concert playlists (also the
+    fallback for entries predating the field), "manual" for Build-page ones,
+    None for playlists that aren't ours ("setlist" wins should a key carry
+    both). Returns dicts sorted by title: ``{rating_key, title, count,
+    app_created, source}`` (``count`` from ``leafCount``, so no per-playlist
+    items() call). Raises PlexError on connect failure.
     """
     try:
         plex = connect_plex(config["plex_baseurl"], config["plex_token"])
     except (PermissionError, ConnectionError) as exc:
         raise PlexError(str(exc)) from exc
 
-    ours = {str(e.get("playlist_rating_key"))
-            for e in load_history(history_path()).values()
-            if e.get("playlist_rating_key") is not None}
+    sources = {}
+    for e in load_history(history_path()).values():
+        key = e.get("playlist_rating_key")
+        if key is not None and sources.get(str(key)) != "setlist":
+            sources[str(key)] = e.get("source") or "setlist"
     try:
         playlists = plex.playlists(playlistType="audio")
     except Exception as exc:
@@ -1349,7 +1354,8 @@ def list_playlists(config):
             "rating_key": key,
             "title": getattr(pl, "title", "") or "",
             "count": getattr(pl, "leafCount", None),
-            "app_created": str(key) in ours,
+            "app_created": str(key) in sources,
+            "source": sources.get(str(key)),
         })
     rows.sort(key=lambda r: r["title"].lower())
     return rows
@@ -1358,7 +1364,8 @@ def list_playlists(config):
 def get_playlist_tracks(config, rating_key):
     """Return an existing playlist's tracks for the editor.
 
-    ``{rating_key, title, tracks: [{rating_key, artist, title, album}]}``.
+    ``{rating_key, title, tracks: [{rating_key, artist, title, album,
+    rating}]}`` (``rating`` is the Plex star rating, 0–10 or None).
     Raises PlexError if the playlist is gone.
     """
     try:
@@ -1375,6 +1382,7 @@ def get_playlist_tracks(config, rating_key):
         "artist": _track_artist_name(item),
         "title": getattr(item, "title", "") or "",
         "album": _track_album(item),
+        "rating": getattr(item, "userRating", None),
     } for item in playlist.items()]
     return {"rating_key": getattr(playlist, "ratingKey", None),
             "title": playlist.title, "tracks": tracks}
@@ -1383,8 +1391,9 @@ def get_playlist_tracks(config, rating_key):
 def get_album_tracks(config, rating_key):
     """Return an album's tracks in playing order (for 'add whole album').
 
-    ``[{rating_key, title, artist, album}]``. Raises PlexError if the album
-    can't be loaded.
+    ``[{rating_key, title, artist, album, rating}]`` (``rating`` is the Plex
+    star rating, 0–10 or None). Raises PlexError if the album can't be
+    loaded.
     """
     try:
         plex = connect_plex(config["plex_baseurl"], config["plex_token"])
@@ -1400,6 +1409,7 @@ def get_album_tracks(config, rating_key):
         "artist": _track_artist_name(t),
         "title": getattr(t, "title", "") or "",
         "album": _track_album(t),
+        "rating": getattr(t, "userRating", None),
     } for t in tracks]
 
 

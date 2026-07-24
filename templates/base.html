@@ -44,7 +44,7 @@
       color: var(--muted); }
     .navlinks a { color: var(--muted); }
     .navlinks a:hover { color: var(--text); text-decoration: none; }
-    /* "New" dropdown: from setlist / manually */
+    /* Nav dropdowns ("New", "History") */
     .navdrop { position: relative; display: inline-flex; }
     .navdrop-btn { background: none; border: none; padding: 0; cursor: pointer;
       font: inherit; font-weight: 600; color: var(--muted);
@@ -122,6 +122,11 @@
     /* Clickable category chips: highlight their rows in the table below. */
     .chip[data-chip-filter], .chip[data-chip-clear] { cursor: pointer; }
     .chip[data-chip-filter]:hover, .chip[data-chip-clear]:hover { border-color: var(--border2); }
+    /* Chips as links (Playlists view filter): plain chips get an accent
+       active state; colour-variant rules below still win for e.g. .exact. */
+    a.chip { text-decoration: none; }
+    a.chip:hover { border-color: var(--border2); }
+    a.chip.active { border-color: var(--accent); background: #E0A33C14; }
     .chip.exact.active   { border-color: var(--green);  background: #5BB98B14; }
     .chip.fuzzy.active   { border-color: var(--accent); background: #E0A33C14; }
     .chip.multi.active   { border-color: var(--blue);   background: #6E9BF014; }
@@ -136,6 +141,9 @@
     tr.row-marked td:first-child { box-shadow: inset 3px 0 0 var(--mark); }
     @keyframes rowflash { from { background: color-mix(in srgb, var(--mark) 45%, transparent); } }
     tr.row-flash td { animation: rowflash .9s ease-out; }
+    /* Sticky (touched) rows: an edited pencil in the number cell so it's legible
+       why the row held still when the preferred album changed. */
+    .num .sticky { margin-left: 4px; color: var(--accent); font-weight: 700; cursor: default; }
 
     /* Panels & tables */
     .panel { background: var(--panel); border: 1px solid var(--border);
@@ -217,6 +225,10 @@
       font-weight: 400; background: var(--panel3); border: 1px solid var(--border2);
       color: var(--text); }
     .result:hover { background: var(--blue); color: #0F0F12; border-color: var(--blue); }
+    /* Plex star rating (⭐️ emoji) in search results and the picker column;
+       slightly shrunk so a five-star run stays subtle. */
+    .result-stars { margin-left: 10px; font-size: 11px; letter-spacing: .1em; }
+    td.stars { font-size: 11px; letter-spacing: .1em; white-space: nowrap; }
     .result-album { display: flex; align-items: center; gap: 8px; }
     .reslabel { flex: none; font-size: 10px; font-weight: 700; letter-spacing: .06em;
       color: var(--blue); background: #6E9BF01f; border: 1px solid #6E9BF03d;
@@ -383,9 +395,16 @@
             <a href="{{ url_for('build_page') }}">manually</a>
           </div>
         </span>
-        <a href="{{ url_for('playlists') }}">Playlists</a>
+        <span class="navdrop" data-navdrop>
+          <button type="button" class="navdrop-btn" data-navdrop-toggle
+                  aria-expanded="false" aria-haspopup="true">History
+            <span class="navdrop-caret">▾</span></button>
+          <div class="navdrop-menu" hidden>
+            <a href="{{ url_for('history') }}">Concerts</a>
+            <a href="{{ url_for('playlists') }}">Playlists</a>
+          </div>
+        </span>
         <a href="{{ url_for('attended') }}">Attended</a>
-        <a href="{{ url_for('history') }}">History</a>
         <a href="{{ url_for('buylist') }}">Buy list</a>
       </span>
     </nav>

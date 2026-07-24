@@ -6,10 +6,14 @@
     <form method="post" action="{{ url_for('attended') }}"
           data-loading="Fetching your shows…">
       <label>setlist.fm username
-        <input name="username" autofocus required value="{{ username }}"
-               placeholder="your setlist.fm username">
+        {# .searchrow puts field + button on one row (same pattern as the
+           missing-row manual search). #}
+        <span class="searchrow" style="margin-top:6px">
+          <input class="q" name="username" autofocus required value="{{ username }}"
+                 placeholder="your setlist.fm username">
+          <button type="submit" class="btn-accent go">Load shows</button>
+        </span>
       </label>
-      <button type="submit" class="btn-accent" style="margin-top:8px">Load shows</button>
     </form>
   </div>
   {% if error %}
