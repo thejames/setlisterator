@@ -18,6 +18,7 @@ network. It reuses the core pipeline from setlist_to_plex.py:
 
 import json
 import os
+import tempfile
 import uuid
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for
@@ -29,6 +30,73 @@ app = Flask(__name__)
 
 def _error(title, message, status=200):
     return render_template("error.html", title=title, message=message), status
+
+
+@app.context_processor
+def _inject_poster_policy():
+    """Expose core's poster policy to every template (single source), so the
+    file input's accept + size hint and the JS pre-check all derive from it."""
+    return {"poster_policy": {"accept": core.POSTER_ACCEPT,
+                              "max_bytes": core.POSTER_MAX_BYTES,
+                              "max_label": core.POSTER_MAX_LABEL}}
+
+
+# Poster upload: an optional browser image saved to a temp file for the core
+# uploader. Best-effort (ADR 0002) — an unusable file never blocks a save; we
+# skip it and warn. Deliberately NOT capped via Flask's MAX_CONTENT_LENGTH,
+# which would 413 the whole POST and lose the form (the preview session). The
+# accept/reject policy (types, size) lives in core.check_poster.
+def _take_poster_upload(req):
+    """Pull an optional ``poster`` file from a request and stash it to a temp
+    file for core.set_playlist_poster.
+
+    Returns ``(poster_path, prewarn)``: ``poster_path`` is a temp file the
+    caller must delete when a valid image was uploaded, else None; ``prewarn``
+    is a short reason when a file was supplied but rejected (unsupported type or
+    too large), else None. No file at all -> ``(None, None)``.
+    """
+    file = req.files.get("poster")
+    if file is None or not file.filename:
+        return None, None
+    data = file.read()
+    if not data:
+        return None, None
+    ext, reason = core.check_poster(file.mimetype or "", len(data))
+    if reason:
+        return None, reason
+    fd, path = tempfile.mkstemp(prefix="setlist_poster_", suffix=ext)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+    return path, None
+
+
+# Shared actionable clause for every "your image didn't take" message, so the
+# create page and the editor notice can't drift apart. Only the lead verb
+# differs by path ("created" vs "saved").
+_POSTER_FAIL_TAIL = "the image couldn’t be set — you can add it in Plex."
+
+
+def _poster_warned(prewarn, poster_status):
+    """Whether to warn the user that their image didn't take: either it was
+    rejected before upload, or the poster upload itself failed."""
+    return prewarn is not None or poster_status is False
+
+
+def _poster_warning_msg(prewarn, poster_status, lead):
+    """The create-path warning message, or None when the image took fine.
+    ``lead`` is the path-specific opener (e.g. "The playlist was created")."""
+    if _poster_warned(prewarn, poster_status):
+        return f"{lead}, but {_POSTER_FAIL_TAIL}"
+    return None
+
+
+def _cleanup_poster(poster_path):
+    """Remove a temp poster file, ignoring a missing/locked file."""
+    if poster_path:
+        try:
+            os.remove(poster_path)
+        except OSError:
+            pass
 
 
 def _stats(result):
@@ -262,6 +330,32 @@ def rematch():
                    preferred_album=result.get("preferred_album", ""))
 
 
+def _create_and_render(name, rating_keys, history_meta, missing):
+    """Shared create path for /create and /build: take the optional poster
+    upload (temp file + guaranteed cleanup), create the playlist, and render the
+    result page — warning if the image didn't take. Returns a Flask response.
+    """
+    poster_path, prewarn = _take_poster_upload(request)
+    try:
+        config = core.load_config()
+        result = core.create_playlist(config, name, rating_keys, history_meta,
+                                      poster_path)
+    except core.ConfigError as exc:
+        return _error("Configuration needed", str(exc))
+    except core.PlexError as exc:
+        return _error("Plex problem", str(exc))
+    finally:
+        _cleanup_poster(poster_path)
+
+    # Dedupe to match what create_playlist actually adds (e.g. a medley track
+    # chosen for two songs lands in the playlist once).
+    added = len(dict.fromkeys(rating_keys))
+    return render_template(
+        "created.html", name=result.name, added=added, missing=missing,
+        poster_warning=_poster_warning_msg(prewarn, result.poster,
+                                           "The playlist was created"))
+
+
 @app.post("/create")
 def create():
     """Build the Plex playlist from the previewed (matched) rating keys."""
@@ -274,19 +368,8 @@ def create():
         return _error("Nothing to create", "No matched tracks to add.", 400)
 
     history_meta = _history_meta_from_form(setlist_id)
-    try:
-        config = core.load_config()
-        final_name = core.create_playlist(config, name, rating_keys, history_meta)
-    except core.ConfigError as exc:
-        return _error("Configuration needed", str(exc))
-    except core.PlexError as exc:
-        return _error("Plex problem", str(exc))
-
-    # Dedupe to match what create_playlist actually adds (e.g. a medley track
-    # chosen for two songs lands in the playlist once).
-    added = len(dict.fromkeys(rating_keys))
-    return render_template("created.html", name=final_name, added=added,
-                           missing=history_meta["missing_tracks"])
+    return _create_and_render(name, rating_keys, history_meta,
+                              history_meta["missing_tracks"])
 
 
 def _picked_rating_keys():
@@ -474,16 +557,7 @@ def build_create():
         return _error("Nothing to create", "Add at least one track.", 400)
     history_meta = {"id": "manual:" + uuid.uuid4().hex, "source": "manual",
                     "artist": "", "date": "", "url": ""}
-    try:
-        config = core.load_config()
-        final_name = core.create_playlist(config, name, rating_keys, history_meta)
-    except core.ConfigError as exc:
-        return _error("Configuration needed", str(exc))
-    except core.PlexError as exc:
-        return _error("Plex problem", str(exc))
-
-    added = len(dict.fromkeys(rating_keys))
-    return render_template("created.html", name=final_name, added=added, missing=[])
+    return _create_and_render(name, rating_keys, history_meta, missing=[])
 
 
 @app.get("/playlists")
@@ -513,8 +587,11 @@ def playlists():
         rows = [r for r in rows if r["source"] == "manual"]
     elif view == "other":
         rows = [r for r in rows if not r["app_created"]]
+    # One-shot notice after an editor save whose poster upload didn't take.
+    notice = (f"Playlist saved, but {_POSTER_FAIL_TAIL}"
+              if request.args.get("notice") == "poster" else None)
     return render_template("playlists.html", playlists=rows, view=view,
-                           counts=counts)
+                           counts=counts, notice=notice)
 
 
 @app.get("/playlists/<rating_key>/edit")
@@ -540,13 +617,22 @@ def playlist_save(rating_key):
         return _error("Missing name", "A playlist name is required.", 400)
     if not rating_keys:
         return _error("Nothing to save", "A playlist needs at least one track.", 400)
+    poster_path, prewarn = _take_poster_upload(request)
     try:
         config = core.load_config()
-        core.set_playlist(config, rating_key, name, rating_keys)
+        result = core.set_playlist(config, rating_key, name, rating_keys,
+                                   poster_path)
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
     except core.PlexError as exc:
         return _error("Plex problem", str(exc))
+    finally:
+        _cleanup_poster(poster_path)
+
+    # The editor redirects (no result page), so a poster hiccup surfaces as a
+    # one-shot notice banner on the Playlists page rather than an inline block.
+    if _poster_warned(prewarn, result.poster):
+        return redirect(url_for("playlists", notice="poster"))
     return redirect(url_for("playlists"))
 
 

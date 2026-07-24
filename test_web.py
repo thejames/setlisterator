@@ -5,6 +5,8 @@ monkeypatched so these exercise routing and rendering only — no network, no
 Plex, no setlist.fm.
 """
 
+import io
+
 import pytest
 
 import setlist_to_plex as core
@@ -476,11 +478,12 @@ def test_preview_setlist_error(client, monkeypatch):
 def test_create_builds_playlist(client, monkeypatch):
     captured = {}
 
-    def fake_create(cfg, name, rating_keys, history_meta):
+    def fake_create(cfg, name, rating_keys, history_meta, poster_path=None):
         captured["name"] = name
         captured["keys"] = rating_keys
         captured["meta"] = history_meta
-        return name + " (2)"   # simulate a name collision suffix
+        captured["poster_path"] = poster_path
+        return core.CreateResult(name + " (2)", None)   # name collision suffix
 
     monkeypatch.setattr(core, "create_playlist", fake_create)
     resp = client.post("/create", data={
@@ -507,8 +510,8 @@ def test_create_builds_playlist(client, monkeypatch):
 def test_create_excludes_unchecked_rows(client, monkeypatch):
     captured = {}
     monkeypatch.setattr(core, "create_playlist",
-                        lambda cfg, name, keys, meta: captured.update(keys=keys)
-                        or name)
+                        lambda cfg, name, keys, meta, poster=None:
+                        captured.update(keys=keys) or core.CreateResult(name, None))
     # Three matched rows, but row 2 is left out of "include".
     resp = client.post("/create", data={
         "name": "Show", "setlist_id": "abc",
@@ -525,8 +528,8 @@ def test_create_passes_song_count_for_full_run(client, monkeypatch):
     # can tell an excluded song from a full run.
     captured = {}
     monkeypatch.setattr(core, "create_playlist",
-                        lambda cfg, name, keys, meta: captured.update(meta=meta)
-                        or name)
+                        lambda cfg, name, keys, meta, poster=None:
+                        captured.update(meta=meta) or core.CreateResult(name, None))
     resp = client.post("/create", data={
         "name": "Show", "setlist_id": "abc",
         "include": ["1"], "pick_1": "10",
@@ -544,7 +547,8 @@ def test_create_requires_keys(client):
 def test_create_added_count_is_deduped(client, monkeypatch):
     # Two songs resolving to the same track (e.g. a medley) -> counted once.
     monkeypatch.setattr(core, "create_playlist",
-                        lambda cfg, name, keys, meta: name)
+                        lambda cfg, name, keys, meta, poster=None:
+                        core.CreateResult(name, None))
     resp = client.post("/create", data={
         "name": "Show", "setlist_id": "abc",
         "include": ["1", "2", "3"],
@@ -563,14 +567,24 @@ def test_build_page_renders(client):
     assert 'name="name"' in body              # the playlist-name field
 
 
+def test_poster_field_policy_derives_from_core(client):
+    # The file input's accept + size cap come from core's single source, so the
+    # template and JS pre-check can't drift from server-side validation.
+    body = client.get("/build").data.decode()
+    assert f'accept="{core.POSTER_ACCEPT}"' in body
+    assert f'data-poster-max="{core.POSTER_MAX_BYTES}"' in body
+    assert core.POSTER_MAX_LABEL in body      # human size hint, same source
+
+
 def test_build_creates_playlist(client, monkeypatch):
     captured = {}
 
-    def fake_create(cfg, name, rating_keys, history_meta=None):
+    def fake_create(cfg, name, rating_keys, history_meta=None, poster_path=None):
         captured["name"] = name
         captured["keys"] = rating_keys
         captured["meta"] = history_meta
-        return name
+        captured["poster_path"] = poster_path
+        return core.CreateResult(name, None)
 
     monkeypatch.setattr(core, "create_playlist", fake_create)
     resp = client.post("/build", data={
@@ -596,7 +610,7 @@ def test_build_requires_tracks(client):
 
 
 def test_build_surfaces_plex_error(client, monkeypatch):
-    def boom(cfg, name, rating_keys, history_meta=None):
+    def boom(cfg, name, rating_keys, history_meta=None, poster_path=None):
         raise core.PlexError("Plex down")
     monkeypatch.setattr(core, "create_playlist", boom)
     body = client.post("/build", data={
@@ -669,9 +683,10 @@ def test_playlist_edit_page_seeds_tracks(client, monkeypatch):
 def test_playlist_save_calls_core_and_redirects(client, monkeypatch):
     captured = {}
 
-    def fake_set(cfg, rating_key, name, rating_keys):
-        captured.update(key=rating_key, name=name, keys=rating_keys)
-        return name, len(rating_keys)
+    def fake_set(cfg, rating_key, name, rating_keys, poster_path=None):
+        captured.update(key=rating_key, name=name, keys=rating_keys,
+                        poster_path=poster_path)
+        return core.SetResult(name, len(rating_keys), None)
 
     monkeypatch.setattr(core, "set_playlist", fake_set)
     resp = client.post("/playlists/999/edit", data={
@@ -680,6 +695,7 @@ def test_playlist_save_calls_core_and_redirects(client, monkeypatch):
     assert resp.headers["Location"].endswith("/playlists")
     assert captured["key"] == "999"
     assert captured["keys"] == ["3", "1", "4"]       # order preserved
+    assert captured["poster_path"] is None           # no image -> nothing to set
 
 
 def test_playlist_save_validates(client):
@@ -690,7 +706,7 @@ def test_playlist_save_validates(client):
 
 
 def test_playlist_save_surfaces_plex_error(client, monkeypatch):
-    def boom(cfg, rating_key, name, rating_keys):
+    def boom(cfg, rating_key, name, rating_keys, poster_path=None):
         raise core.PlexError("Plex down")
     monkeypatch.setattr(core, "set_playlist", boom)
     body = client.post("/playlists/999/edit", data={
@@ -703,6 +719,95 @@ def test_delete_back_to_playlists(client, monkeypatch):
     resp = client.post("/playlist/delete", data={"id": "999", "back": "playlists"})
     assert resp.status_code == 302
     assert resp.headers["Location"].endswith("/playlists")
+
+
+# --- poster upload (create + build + editor) -------------------------------
+
+def _img(name="cover.jpg", ctype="image/jpeg", data=b"\xff\xd8\xff\x00stub"):
+    return (io.BytesIO(data), name, ctype)
+
+
+def test_create_forwards_poster_to_core(client, monkeypatch):
+    captured = {}
+
+    def fake_create(cfg, name, keys, meta, poster_path=None):
+        captured["poster_path"] = poster_path
+        return core.CreateResult(name, True)
+
+    monkeypatch.setattr(core, "create_playlist", fake_create)
+    resp = client.post("/create", data={
+        "name": "Show", "setlist_id": "abc", "include": ["1"], "pick_1": "10",
+        "missing_json": "[]", "fuzzy_json": "[]", "poster": _img(),
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    assert captured["poster_path"] is not None            # a temp file was passed
+    assert "couldn’t be set" not in resp.data.decode()    # no warning on success
+
+
+def test_create_warns_on_unsupported_image(client, monkeypatch):
+    captured = {}
+
+    def fake_create(cfg, name, keys, meta, poster_path=None):
+        captured["poster_path"] = poster_path
+        return core.CreateResult(name, None)
+
+    monkeypatch.setattr(core, "create_playlist", fake_create)
+    resp = client.post("/create", data={
+        "name": "Show", "setlist_id": "abc", "include": ["1"], "pick_1": "10",
+        "missing_json": "[]", "fuzzy_json": "[]",
+        "poster": _img("notes.txt", "text/plain", b"hello"),
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    assert captured["poster_path"] is None                # rejected before upload
+    assert "couldn’t be set" in resp.data.decode()        # and the user is told
+
+
+def test_create_warns_when_poster_upload_fails(client, monkeypatch):
+    # Valid file, but Plex rejects it -> core reports poster=False -> warn.
+    monkeypatch.setattr(core, "create_playlist",
+                        lambda cfg, name, keys, meta, poster_path=None:
+                        core.CreateResult(name, False))
+    resp = client.post("/create", data={
+        "name": "Show", "setlist_id": "abc", "include": ["1"], "pick_1": "10",
+        "missing_json": "[]", "fuzzy_json": "[]", "poster": _img(),
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    assert "couldn’t be set" in resp.data.decode()
+
+
+def test_build_forwards_poster_to_core(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(core, "create_playlist",
+                        lambda cfg, name, keys, meta=None, poster_path=None:
+                        captured.update(poster_path=poster_path)
+                        or core.CreateResult(name, True))
+    resp = client.post("/build", data={
+        "name": "Mix", "rating_keys": ["10"], "poster": _img("c.png", "image/png"),
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    assert captured["poster_path"] is not None
+
+
+def test_editor_forwards_poster_and_warns_on_redirect(client, monkeypatch):
+    captured = {}
+
+    def fake_set(cfg, key, name, keys, poster_path=None):
+        captured["poster_path"] = poster_path
+        return core.SetResult(name, len(keys), False)   # poster upload failed
+
+    monkeypatch.setattr(core, "set_playlist", fake_set)
+    resp = client.post("/playlists/999/edit", data={
+        "name": "N", "rating_keys": ["1"], "poster": _img("c.webp", "image/webp"),
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 302
+    assert captured["poster_path"] is not None
+    assert "notice=poster" in resp.headers["Location"]   # one-shot warning banner
+
+
+def test_editor_notice_banner_renders(client, monkeypatch):
+    monkeypatch.setattr(core, "list_playlists", lambda cfg: [])
+    body = client.get("/playlists", query_string={"notice": "poster"}).data.decode()
+    assert "couldn’t be set" in body
 
 
 def test_delete_back_defaults_and_rejects_junk(client, monkeypatch):

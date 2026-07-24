@@ -32,8 +32,10 @@ Web app defaults to port **5001** (macOS uses 5000 for AirPlay); override with `
 **The pipeline is read → match → create, split so the web UI can insert a human review step:**
 
 1. `gather_matches(config, setlist_id, ...)` — orchestrator. Fetches the setlist, resolves the artist, matches every song, returns a dict (`matched`/`missing`/`fuzzy`/`songs` + `candidates` per song). **Read-only — creates nothing.** Both the CLI and the web `/preview` call this.
-2. `create_playlist(config, name, rating_keys, ...)` — the only thing that mutates Plex. Takes already-chosen Plex `rating_key`s, calls `plex.createPlaylist`, records history. Nothing is re-matched here.
+2. `create_playlist(config, name, rating_keys, ..., poster_path=None)` — the only thing that mutates Plex on the create path. Takes already-chosen Plex `rating_key`s, calls `plex.createPlaylist`, records history, returns a `CreateResult(name, poster)`. Nothing is re-matched here.
 3. `add_to_playlist(...)` — the "Update" path; add-only top-up of an existing playlist (`playlist.addItems`).
+
+An **optional playlist poster** (the "folder image") can be uploaded on all three write paths — setlist create, Build, and the editor. `create_playlist` and `set_playlist` both take an optional `poster_path` and defer to the shared `set_playlist_poster(playlist, poster_path)` helper (`uploadPoster` + best-effort `uploadSquareArt`). It's **best-effort**: an image problem never blocks or undoes the save, it just surfaces a warning — see `docs/adr/0002-playlist-poster-best-effort.md`. The web layer saves the browser upload to a temp file (`web._take_poster_upload`) and deliberately avoids Flask's `MAX_CONTENT_LENGTH` (a 413 would lose the preview session).
 
 The load-bearing hand-off between stages is the Plex **`rating_key`** (an integer). It's the universal track identifier threaded through the match IR, the history JSON, and both frontends' form fields (`web._picked_rating_keys`). The web flow is: `/preview` renders candidates → user picks versions → `/create` rebuilds tracks *by rating key* with no re-matching. Switching the preferred album on the preview page hits `/rematch` (JSON, same `gather_matches`) and the client re-orders only *untouched* rows in place, so hand-edits survive — see `docs/adr/0001-client-rematch-endpoint.md`.
 

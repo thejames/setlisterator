@@ -394,6 +394,50 @@
     updateCount();
   }
 
+  // --- optional poster upload (create + build + editor) --------------------
+  // Progressive enhancement over a bare <input type=file>: a thumbnail preview
+  // plus a client-side type/size pre-check so an obviously-bad file is flagged
+  // before submit. The server is still the real safety net (best-effort, never
+  // blocks the save) — this just gives faster feedback. The accepted types and
+  // size cap are read from the field's data-attrs (rendered from core's single
+  // source), so this pre-check can't drift from the server's own validation.
+  function posterPolicy(field) {
+    const types = (field.getAttribute("data-poster-accept") || "").split(",")
+      .map(function (s) { return s.trim(); }).filter(Boolean);
+    return { types: types, max: Number(field.getAttribute("data-poster-max")) || 0 };
+  }
+  function mbLabel(bytes) { return Math.round(bytes / (1024 * 1024)) + " MB"; }
+  function posterNote(field, text, bad) {
+    const note = field.querySelector("[data-poster-note]");
+    if (!note) return;
+    note.textContent = text || "";
+    note.hidden = !text;
+    note.classList.toggle("bad", !!bad);
+  }
+  function onPosterPick(input) {
+    const field = input.closest("[data-poster-field]");
+    const prev = field && field.querySelector("[data-poster-preview]");
+    const file = input.files && input.files[0];
+    if (prev) { prev.hidden = true; prev.removeAttribute("src"); }
+    if (!field) return;
+    if (!file) { posterNote(field, ""); return; }
+    const pol = posterPolicy(field);
+    if (pol.types.length && pol.types.indexOf(file.type) === -1) {
+      posterNote(field, "That’s not a JPEG, PNG or WebP — it won’t be used.", true);
+      return;
+    }
+    if (pol.max && file.size > pol.max) {
+      posterNote(field, "That image is over " + mbLabel(pol.max) + " — it won’t be used.", true);
+      return;
+    }
+    posterNote(field, "");
+    if (prev) {
+      const reader = new FileReader();
+      reader.onload = function () { prev.src = reader.result; prev.hidden = false; };
+      reader.readAsDataURL(file);
+    }
+  }
+
   // --- wiring --------------------------------------------------------------
   document.querySelectorAll("form[data-loading]").forEach(function (form) {
     form.addEventListener("submit", function () {
@@ -433,6 +477,10 @@
   document.querySelectorAll("[data-album-select]").forEach(function (sel) {
     sel.dataset.prev = sel.value;   // last album that matched, for error revert
     sel.addEventListener("change", function () { rematchAlbum(sel); });
+  });
+
+  document.querySelectorAll("[data-poster-input]").forEach(function (input) {
+    input.addEventListener("change", function () { onPosterPick(input); });
   });
 
   document.querySelectorAll("[data-missing]").forEach(function (card) {

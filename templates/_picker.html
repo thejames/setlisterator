@@ -3,7 +3,7 @@
    Context vars: action, submit_label, loading_label (opt), name_value (opt),
    initial (opt list of {rating_key,label} to seed), delete_link (opt),
    hint (opt). #}
-<form method="post" action="{{ action }}"
+<form method="post" action="{{ action }}" enctype="multipart/form-data"
       data-loading="{{ loading_label|default('Saving…') }}">
 
   <div class="header-divider">
@@ -11,6 +11,7 @@
     <input class="title-input" name="name" required autofocus
            placeholder="My playlist" value="{{ name_value|default('') }}">
     {% if hint %}<div class="meta"><span class="sub">{{ hint }}</span></div>{% endif %}
+    {% include "_poster_field.html" %}
   </div>
 
   <div class="panel" data-build>

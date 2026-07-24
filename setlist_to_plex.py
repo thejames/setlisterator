@@ -442,6 +442,15 @@ def _track_album(track):
 # 'scoped' (the artist's own tracks) or 'global' (fallback title search).
 Match = namedtuple("Match", "track quality tier source")
 
+# Result of a playlist create/edit. ``poster`` is None when no image was
+# supplied, True when the poster upload succeeded, False when it was attempted
+# but failed (best-effort — see ADR 0002). The web layer keys its "couldn't set
+# the image" warning off a False here; the CLI never supplies an image, so it
+# stays None. CreateResult (create) and SetResult (in-place edit) name their
+# results symmetrically so callers read fields instead of tuple positions.
+CreateResult = namedtuple("CreateResult", "name poster")
+SetResult = namedtuple("SetResult", "name count poster")
+
 # Human-readable names for the _title_rank tiers (index == rank).
 TIER_NAMES = ("exact", "loose", "medley", "prefix")
 
@@ -1176,14 +1185,70 @@ def _playlist_summary(history_meta, added_count, track_count=None):
     return "\n".join(lines)
 
 
-def create_playlist(config, name, rating_keys, history_meta=None):
+# Playlist poster upload policy — the domain rule for what a poster may be set
+# from. The web layer reads the multipart bytes and writes the temp file; the
+# accept/reject decision lives here so it isn't business logic in the Flask
+# layer. Keyed by MIME type -> the temp-file extension to save under.
+POSTER_MAX_BYTES = 10 * 1024 * 1024   # ~10 MB
+_POSTER_EXTENSIONS = {"image/jpeg": ".jpg", "image/png": ".png",
+                      "image/webp": ".webp"}
+# Derived once so the <input accept> string and the human size hint stay in
+# lockstep with the validation above. The web layer threads these to the
+# template and (via DOM data-attrs) the JS pre-check, so no build step is
+# needed and the three consumers can't drift from this single source.
+POSTER_ACCEPT = ",".join(_POSTER_EXTENSIONS)          # image/jpeg,image/png,image/webp
+POSTER_MAX_LABEL = f"{POSTER_MAX_BYTES // (1024 * 1024)} MB"
+
+
+def check_poster(mimetype, size):
+    """Validate an uploaded poster against the allowed types and size ceiling.
+
+    Returns ``(extension, reason)``: on acceptance the temp-file extension to
+    use and ``None`` (e.g. ``(".jpg", None)``); on rejection ``None`` and a
+    short reason (``(None, "too large")`` / ``(None, "unsupported type")``).
+    """
+    if size > POSTER_MAX_BYTES:
+        return None, "too large"
+    ext = _POSTER_EXTENSIONS.get(mimetype or "")
+    if ext is None:
+        return None, "unsupported type"
+    return ext, None
+
+
+def set_playlist_poster(playlist, poster_path):
+    """Upload a poster image to a Plex playlist from a local file path.
+
+    Sets both the poster and — best-effort — the square art, so square-grid
+    clients show the image too. Fail-soft by design: any upload error is logged,
+    never raised, so the caller's playlist save always survives an image hiccup
+    (see ADR 0002). Returns True if the poster upload succeeded, False otherwise;
+    that False is what surfaces the "couldn't set the image" warning in the web
+    UI. A square-art-only failure just logs — the poster is the visible thumb.
+    """
+    try:
+        playlist.uploadPoster(filepath=poster_path)
+        poster_ok = True
+    except Exception as exc:
+        logger.warning("Could not set playlist poster (%s).", exc)
+        poster_ok = False
+    try:
+        playlist.uploadSquareArt(filepath=poster_path)
+    except Exception as exc:
+        logger.warning("Could not set playlist square art (%s).", exc)
+    return poster_ok
+
+
+def create_playlist(config, name, rating_keys, history_meta=None,
+                    poster_path=None):
     """Create a Plex playlist from track rating keys and record history.
 
     ``rating_keys`` is an ordered list of Plex track rating keys (as produced
     by gather_matches). ``history_meta`` is an optional dict of show fields
-    (id/url/artist/date/missing) to record once the playlist exists. Returns
-    the final (possibly suffix-deduped) playlist name. Raises PlexError on
-    failure.
+    (id/url/artist/date/missing) to record once the playlist exists.
+    ``poster_path`` is an optional local image file to set as the playlist
+    poster (best-effort — a failure never undoes the created playlist).
+    Returns a CreateResult (final name + poster status). Raises PlexError on
+    failure to create the playlist itself.
     """
     try:
         plex = connect_plex(config["plex_baseurl"], config["plex_token"])
@@ -1225,9 +1290,13 @@ def create_playlist(config, name, rating_keys, history_meta=None):
         except Exception as exc:
             logger.warning("Could not set playlist summary (%s).", exc)
 
+    # Best-effort poster — None when no image was supplied, else the upload's
+    # success. Runs after the playlist exists, so it can never undo creation.
+    poster = set_playlist_poster(playlist, poster_path) if poster_path else None
+
     _record_history(final_name, getattr(playlist, "ratingKey", None),
                     len(tracks), history_meta)
-    return final_name
+    return CreateResult(final_name, poster)
 
 
 def find_playlist(plex, rating_key=None, name=None):
@@ -1413,13 +1482,16 @@ def get_album_tracks(config, rating_key):
     } for t in tracks]
 
 
-def set_playlist(config, rating_key, name, rating_keys):
+def set_playlist(config, rating_key, name, rating_keys, poster_path=None):
     """Apply an edit to an existing Plex playlist in place: rename + set the
     exact ordered membership. Edits the real playlist so it keeps its rating key
     (and any history link).
 
     ``rating_keys`` is the desired ordered track list (deduped like
-    create_playlist). Returns ``(final_title, track_count)``. Raises PlexError.
+    create_playlist). ``poster_path`` is an optional local image file to set as
+    the playlist poster (best-effort — never undoes the edit). Returns a
+    SetResult (name + track count + poster status, None when no image was
+    supplied). Raises PlexError.
     """
     try:
         plex = connect_plex(config["plex_baseurl"], config["plex_token"])
@@ -1482,9 +1554,12 @@ def set_playlist(config, rating_key, name, rating_keys):
             prev = item
 
     count = sum(1 for k in desired if k in by_key)
+    # Best-effort poster — after membership so an image hiccup never undoes the
+    # edit. None when no image was supplied (empty field = keep existing poster).
+    poster = set_playlist_poster(playlist, poster_path) if poster_path else None
     _update_history_playlist(getattr(playlist, "ratingKey", None),
                              final_title, count)
-    return final_title, count
+    return SetResult(final_title, count, poster)
 
 
 def backfill_history(config):
@@ -1627,7 +1702,7 @@ def main(argv=None):
     }
     try:
         final_name = create_playlist(
-            config, result["playlist_name"], rating_keys, history_meta)
+            config, result["playlist_name"], rating_keys, history_meta).name
     except PlexError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_PLEX
