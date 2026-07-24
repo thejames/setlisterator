@@ -1364,7 +1364,8 @@ def list_playlists(config):
 def get_playlist_tracks(config, rating_key):
     """Return an existing playlist's tracks for the editor.
 
-    ``{rating_key, title, tracks: [{rating_key, artist, title, album}]}``.
+    ``{rating_key, title, tracks: [{rating_key, artist, title, album,
+    rating}]}`` (``rating`` is the Plex star rating, 0–10 or None).
     Raises PlexError if the playlist is gone.
     """
     try:
@@ -1381,6 +1382,7 @@ def get_playlist_tracks(config, rating_key):
         "artist": _track_artist_name(item),
         "title": getattr(item, "title", "") or "",
         "album": _track_album(item),
+        "rating": getattr(item, "userRating", None),
     } for item in playlist.items()]
     return {"rating_key": getattr(playlist, "ratingKey", None),
             "title": playlist.title, "tracks": tracks}
@@ -1389,8 +1391,9 @@ def get_playlist_tracks(config, rating_key):
 def get_album_tracks(config, rating_key):
     """Return an album's tracks in playing order (for 'add whole album').
 
-    ``[{rating_key, title, artist, album}]``. Raises PlexError if the album
-    can't be loaded.
+    ``[{rating_key, title, artist, album, rating}]`` (``rating`` is the Plex
+    star rating, 0–10 or None). Raises PlexError if the album can't be
+    loaded.
     """
     try:
         plex = connect_plex(config["plex_baseurl"], config["plex_token"])
@@ -1406,6 +1409,7 @@ def get_album_tracks(config, rating_key):
         "artist": _track_artist_name(t),
         "title": getattr(t, "title", "") or "",
         "album": _track_album(t),
+        "rating": getattr(t, "userRating", None),
     } for t in tracks]
 
 

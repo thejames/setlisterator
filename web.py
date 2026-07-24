@@ -175,6 +175,7 @@ def search():
         "title": t.title,
         "artist": core._track_artist_name(t),
         "album": core._track_album(t),
+        "rating": getattr(t, "userRating", None),   # Plex stars, 0–10 or None
     } for t in tracks]
     return jsonify(results=results)
 

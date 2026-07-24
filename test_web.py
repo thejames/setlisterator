@@ -348,12 +348,13 @@ def test_preview_missing_row_has_search_ui(client, monkeypatch):
 # --- /search (manual override JSON endpoint) -------------------------------
 
 class _Track:
-    def __init__(self, title, artist, album, key):
+    def __init__(self, title, artist, album, key, rating=None):
         self.title = title
         self.grandparentTitle = artist
         self.parentTitle = album
         self.ratingKey = key
         self.originalTitle = None
+        self.userRating = rating
 
 
 class _Album:
@@ -377,13 +378,14 @@ class _Section:
 
 
 def test_search_returns_json(client, monkeypatch):
-    section = _Section([_Track("Jilly's on Smack", "Primus", "Pork Soda", 77)])
+    section = _Section([_Track("Jilly's on Smack", "Primus", "Pork Soda", 77,
+                               rating=8.0)])
     monkeypatch.setattr(core, "connect_plex", lambda u, t: object())
     monkeypatch.setattr(core, "get_music_section", lambda plex, lib: section)
     data = client.get("/search?q=jilly").get_json()
     assert data["results"][0] == {
         "type": "track", "rating_key": 77, "title": "Jilly's on Smack",
-        "artist": "Primus", "album": "Pork Soda"}
+        "artist": "Primus", "album": "Pork Soda", "rating": 8.0}
 
 
 def test_search_includes_albums_when_requested(client, monkeypatch):

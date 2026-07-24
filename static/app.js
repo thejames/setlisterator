@@ -10,6 +10,12 @@
   function incFor(pos) {
     return document.querySelector('input.inc[value="' + pos + '"]');
   }
+  // Plex star rating (0–10, 2 per star) → "⭐️⭐️⭐️", rounded to whole stars
+  // (half-star ratings round up); "" when unrated.
+  function stars(rating) {
+    if (rating == null || rating <= 0) return "";
+    return "⭐️".repeat(Math.round(rating / 2));
+  }
 
   // --- live selected count (action bar + Create button) --------------------
   function updateCount() {
@@ -48,6 +54,8 @@
       const label = t.artist + " — " + t.title + (t.album ? " · " + t.album : "");
       const b = el("button", "result", label);
       b.type = "button";
+      const st = stars(t.rating);
+      if (st) b.appendChild(el("span", "result-stars", st));
       b.addEventListener("click", function () { onPick(t, label); });
       results.appendChild(b);
     });
@@ -87,6 +95,8 @@
             if (tr.rating_key == null) return;
             const tb = el("button", "result result-track", tr.title || "");
             tb.type = "button";
+            const st = stars(tr.rating);
+            if (st) tb.appendChild(el("span", "result-stars", st));
             tb.addEventListener("click", function () { onPick(tr, tr.title); });
             sub.appendChild(tb);
           });
@@ -447,6 +457,7 @@
       trackTd.appendChild(hidden);
       const artistTd = el("td", "trunc", t.artist || "");
       const albumTd = el("td", "trunc sub", t.album || "");
+      const starsTd = el("td", "sub stars", stars(t.rating));
 
       const rmTd = el("td");
       rmTd.style.textAlign = "right";
@@ -470,6 +481,7 @@
       tr.appendChild(trackTd);
       tr.appendChild(artistTd);
       tr.appendChild(albumTd);
+      tr.appendChild(starsTd);
       tr.appendChild(rmTd);
       body.appendChild(tr);
       renumber(); refresh();

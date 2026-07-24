@@ -48,7 +48,9 @@ aren't documented here.)
 
    Open <http://127.0.0.1:5001>, paste a setlist.fm URL, hit **Preview**, pick
    track versions where you're offered a choice, then **Create playlist**. The
-   **History** link in the navbar lists shows you've already made.
+   **History ▾** menu in the navbar holds **Concerts** (shows you've already
+   made) and **Playlists** (every Plex audio playlist, filterable by whether
+   this app built it).
 
    Prefer the terminal? Use the CLI instead:
 
@@ -191,7 +193,7 @@ search. The summary **chips** above the table double as filters: click one
 click it again — or the **songs** total — to clear. The source **URL bar**
 links out to the show on setlist.fm in a new tab.
 
-The top navbar's **History** link opens a page listing every show you've
+**Concerts** (under the navbar's **History ▾** menu) lists every show you've
 created, newest first. Each row can **Re-open** the setlist in Preview, link out
 to its setlist.fm source, or **Update** the existing playlist: it re-matches the
 show against your *current* library and shows the tracks that are now available

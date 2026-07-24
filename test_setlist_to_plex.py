@@ -239,12 +239,14 @@ def test_unique_name_ignores_titleless_objects():
 # ---------------------------------------------------------------------------
 
 class _FakeTrack:
-    def __init__(self, title, artist, rating_key=None, album="Some Album"):
+    def __init__(self, title, artist, rating_key=None, album="Some Album",
+                 rating=None):
         self.title = title
         self.grandparentTitle = artist
         self.originalTitle = None
         self.parentTitle = album
         self.ratingKey = rating_key
+        self.userRating = rating
 
 
 class _FakeArtist:
@@ -1231,7 +1233,7 @@ def test_list_playlists_flags_app_created(monkeypatch, tmp_path):
 
 def test_get_playlist_tracks_returns_rows(monkeypatch):
     pl = _FakePlaylistObj("Mix", rating_key=7, items=[
-        _FakeTrack("Song A", "Artist", rating_key=1, album="Alb"),
+        _FakeTrack("Song A", "Artist", rating_key=1, album="Alb", rating=9.0),
         _FakeTrack("Song B", "Artist", rating_key=2, album="Alb2")])
     monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
 
@@ -1241,6 +1243,8 @@ def test_get_playlist_tracks_returns_rows(monkeypatch):
     assert [t["rating_key"] for t in got["tracks"]] == [1, 2]
     assert got["tracks"][0]["artist"] == "Artist"
     assert got["tracks"][0]["album"] == "Alb"
+    assert got["tracks"][0]["rating"] == 9.0      # Plex stars pass through
+    assert got["tracks"][1]["rating"] is None     # unrated
 
 
 def test_get_playlist_tracks_missing_raises(monkeypatch):
@@ -1252,7 +1256,8 @@ def test_get_playlist_tracks_missing_raises(monkeypatch):
 def test_get_album_tracks_returns_ordered(monkeypatch):
     class _Album:
         def tracks(self):
-            return [_FakeTrack("A", "Primus", rating_key=1, album="Pork Soda"),
+            return [_FakeTrack("A", "Primus", rating_key=1, album="Pork Soda",
+                               rating=7.0),
                     _FakeTrack("B", "Primus", rating_key=2, album="Pork Soda")]
 
     class _Plex:
@@ -1263,6 +1268,7 @@ def test_get_album_tracks_returns_ordered(monkeypatch):
     got = m.get_album_tracks(_CONFIG, "900")
     assert [t["rating_key"] for t in got] == [1, 2]          # album order preserved
     assert got[0]["artist"] == "Primus" and got[0]["album"] == "Pork Soda"
+    assert got[0]["rating"] == 7.0 and got[1]["rating"] is None
 
 
 def test_get_album_tracks_bad_id_raises(monkeypatch):
