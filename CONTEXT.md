@@ -23,3 +23,7 @@ _Avoid_: Pinned, locked, persisted (nothing is written to disk — sticky is in-
 **Preferred album**:
 The album the matcher favours when a setlist song appears on more than one album in the library. Applies only to untouched selections.
 _Avoid_: Preferred release, source album.
+
+**Playlist poster**:
+The image shown as a playlist's thumbnail in Plex — optionally set from an uploaded file when a playlist is created or later edited in the app. What users informally call the playlist's "folder image".
+_Avoid_: Folder image, cover, artwork, thumbnail.
