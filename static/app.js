@@ -26,6 +26,25 @@
     if (btn) btn.textContent = n;
   }
 
+  // --- sticky (touched) selections -----------------------------------------
+  // A selection becomes sticky the moment the user acts on it; a preferred-album
+  // switch then re-matches only untouched rows (docs/adr/0001). Intent-based —
+  // any interaction freezes the row. Positions are tracked as strings; the flag
+  // lives only in the page, so leaving/reloading resets it.
+  const touched = new Set();
+  function markTouched(pos) {
+    pos = String(pos);
+    touched.add(pos);
+    const row = document.querySelector('tr[data-rownum="' + pos + '"]');
+    if (!row) return;
+    const num = row.querySelector(".num");
+    if (num && !num.querySelector(".sticky")) {
+      const p = el("span", "sticky", "✎");
+      p.title = "Edited — kept when you change the preferred album";
+      num.appendChild(p);
+    }
+  }
+
   // --- manual library search (shared by missing cards and matched rows) ----
   // `scope` is any element containing a `.q` input and a `.results` box; each
   // result button invokes onPick(track, label).
@@ -124,12 +143,14 @@
     card.querySelector(".searcher").hidden = true;
     card.querySelector(".results").textContent = "";
     card.classList.remove("skipped");
+    markTouched(card.dataset.pos);
     updateCount();
   }
   // Re-point a matched row to an arbitrary library track found via search.
   function applyPick(pos, track, label) {
     const row = document.querySelector('tr[data-rownum="' + pos + '"]');
     if (!row) return;
+    markTouched(pos);
     const pick = row.querySelector('[name="pick_' + pos + '"]');
     if (pick) { pick.value = track.rating_key; pick.disabled = false; }
     const inc = row.querySelector("input.inc");
@@ -206,6 +227,8 @@
     opt.classList.add("sel");
     dd.querySelector(".dd-menu").hidden = true;
     dd.querySelector(".dd-btn").classList.remove("open");
+    const row = dd.closest("tr[data-rownum]");
+    if (row) markTouched(row.dataset.rownum);
   }
 
   // --- preview JSON of the current selection -------------------------------
@@ -220,6 +243,155 @@
     });
     return JSON.stringify(
       { playlist: nameEl ? nameEl.value : "", tracks: tracks }, null, 2);
+  }
+
+  // --- fuzzy-match confirm cards -------------------------------------------
+  function onAccept(b) {
+    const inc = incFor(b.dataset.accept);
+    if (inc) inc.checked = true;
+    const card = b.closest(".fuzzycard");
+    if (card) card.classList.remove("rejected");
+    markTouched(b.dataset.accept);
+    updateCount();
+  }
+  function onReject(b) {
+    const inc = incFor(b.dataset.reject);
+    if (inc) inc.checked = false;
+    const card = b.closest(".fuzzycard");
+    if (card) card.classList.add("rejected");
+    markTouched(b.dataset.reject);
+    updateCount();
+  }
+  function wireFuzzyCard(card) {
+    const a = card.querySelector("[data-accept]");
+    const r = card.querySelector("[data-reject]");
+    if (a) a.addEventListener("click", function () { onAccept(a); });
+    if (r) r.addEventListener("click", function () { onReject(r); });
+  }
+  // The candidate sub-line shared by the dropdown and the fuzzy card (mirrors
+  // the Jinja form in preview.html): "Album · tier/source".
+  function candSub(c) {
+    return (c.album ? c.album + " · " : "") + c.tier + "/" + c.source;
+  }
+  // Build a fuzzy confirm card mirroring the server-rendered markup so an album
+  // switch can add one for a row whose new leading match is only a fuzzy hit.
+  function makeFuzzyCard(song) {
+    const card = el("div", "card card-fuzzy fuzzycard");
+    card.dataset.fcard = song.position;
+    const left = el("div"); left.style.minWidth = "0";
+    left.appendChild(el("div", "caplabel", "From setlist"));
+    left.appendChild(el("div", "trunc", song.title));
+    const right = el("div"); right.style.minWidth = "0";
+    right.appendChild(el("div", "caplabel", "Plex suggests"));
+    right.appendChild(el("div", "trunc",
+      song.track_artist + " — " + song.track_title));
+    right.appendChild(el("div", "sub trunc", candSub(song)));
+    const btns = el("div");
+    btns.style.cssText = "display:flex;gap:8px;justify-content:flex-end";
+    const acc = el("button", "btn-sm btn-amber", "Accept");
+    acc.type = "button"; acc.dataset.accept = song.position;
+    const rej = el("button", "btn-sm", "Reject");
+    rej.type = "button"; rej.dataset.reject = song.position;
+    btns.appendChild(acc); btns.appendChild(rej);
+    card.appendChild(left);
+    card.appendChild(el("div", "arrow-mid", "→"));
+    card.appendChild(right); card.appendChild(btns);
+    return card;
+  }
+  function insertFuzzyInOrder(container, card, position) {
+    const after = Array.prototype.find.call(container.children, function (c) {
+      return Number(c.dataset.fcard) > position;
+    });
+    container.insertBefore(card, after || null);
+  }
+  // Add/remove/refresh the fuzzy card for an untouched position to match its new
+  // leading candidate. Only ever called for untouched rows, so a present card is
+  // never in an accepted/rejected (touched) state — safe to rebuild wholesale.
+  function syncFuzzyCard(song) {
+    const container = document.querySelector("[data-fuzzy-cards]");
+    const section = document.querySelector("[data-fuzzy-section]");
+    if (!container) return;
+    const pos = String(song.position);
+    const existing = container.querySelector('[data-fcard="' + pos + '"]');
+    if (existing) existing.remove();
+    if (song.matched && song.quality === "fuzzy") {
+      const card = makeFuzzyCard(song);
+      insertFuzzyInOrder(container, card, song.position);
+      wireFuzzyCard(card);
+    }
+    if (section) section.hidden = container.children.length === 0;
+  }
+
+  // --- preferred-album re-match (in place, keeps touched rows sticky) -------
+  // Re-order an untouched multi-match row's dropdown to the server's new
+  // candidate order and adopt its new default pick + display. Deliberately does
+  // NOT call selectDdOpt() — a re-match is not a user touch, so the row stays
+  // untouched and will re-match again on the next album switch.
+  function patchMultiRow(row, song) {
+    const dd = row.querySelector("[data-dd]");
+    const menu = dd && dd.querySelector(".dd-menu");
+    const cands = song.candidates || [];
+    if (!menu || !cands.length) return;
+    cands.forEach(function (c) {                    // move options into new order
+      const opt = menu.querySelector('.dd-opt[data-key="' + c.rating_key + '"]');
+      if (opt) menu.appendChild(opt);
+    });
+    menu.querySelectorAll(".dd-opt").forEach(function (o) { o.classList.remove("sel"); });
+    const lead = cands[0];
+    const first = menu.querySelector('.dd-opt[data-key="' + lead.rating_key + '"]');
+    if (first) first.classList.add("sel");
+    dd.querySelector("input[type=hidden]").value = lead.rating_key;
+    dd.querySelector("[data-dd-title]").textContent =
+      lead.track_artist + " — " + lead.track_title;
+    dd.querySelector("[data-dd-sub]").textContent = candSub(lead);
+  }
+  // Inline status shown beside the album select. On failure we keep the page's
+  // selections intact rather than resubmitting, so the message must be visible.
+  function setRematchMsg(form, text) {
+    let n = form.querySelector("[data-rematch-msg]");
+    if (!n) {
+      n = el("span", "sub");
+      n.dataset.rematchMsg = "1";
+      n.style.color = "var(--red)";
+      form.appendChild(n);
+    }
+    n.textContent = text;
+  }
+  // The in-place "Prefer album" switch: re-match via JSON, patch only untouched
+  // rows. On failure it keeps every selection and reverts the album choice —
+  // never a full resubmit, which would wipe the user's in-page edits.
+  async function rematchAlbum(sel) {
+    const form = sel.form;
+    // Snapshot the form BEFORE disabling the select — a disabled control is
+    // omitted from FormData, which would drop prefer_album from the request.
+    const body = new FormData(form);
+    const prevAlbum = sel.dataset.prev != null ? sel.dataset.prev : sel.value;
+    const apply = form.querySelector('button[type="submit"]');
+    const prev = apply ? apply.textContent : "";
+    if (apply) { apply.textContent = "Re-matching…"; apply.disabled = true; }
+    sel.disabled = true;
+    let data;
+    try {
+      const resp = await fetch("/rematch", { method: "POST", body: body });
+      data = await resp.json();
+    } catch (e) { data = { error: "Re-match failed" }; }
+    sel.disabled = false;
+    if (apply) { apply.textContent = prev; apply.disabled = false; }
+    if (!data || data.error) {
+      sel.value = prevAlbum;                          // undo the choice; keep rows
+      setRematchMsg(form, "Couldn't re-match — selections left unchanged.");
+      return;
+    }
+    setRematchMsg(form, "");
+    (data.songs || []).forEach(function (song) {
+      if (touched.has(String(song.position))) return;   // sticky: leave it alone
+      const row = document.querySelector(
+        'tr[data-rownum="' + song.position + '"]');
+      if (row && row.querySelector("[data-dd]")) patchMultiRow(row, song);
+      syncFuzzyCard(song);
+    });
+    sel.dataset.prev = sel.value;                     // remember for next revert
+    updateCount();
   }
 
   // --- wiring --------------------------------------------------------------
@@ -256,13 +428,11 @@
     });
   });
 
-  // Prefer-album select: re-match on change. No-JS users use the Apply button.
-  // requestSubmit() fires the submit event so the data-loading spinner runs.
+  // Prefer-album select: re-match in place, keeping touched rows sticky.
+  // No-JS users fall back to the Apply button (a full submit that resets).
   document.querySelectorAll("[data-album-select]").forEach(function (sel) {
-    sel.addEventListener("change", function () {
-      if (sel.form.requestSubmit) sel.form.requestSubmit();
-      else sel.form.submit();
-    });
+    sel.dataset.prev = sel.value;   // last album that matched, for error revert
+    sel.addEventListener("change", function () { rematchAlbum(sel); });
   });
 
   document.querySelectorAll("[data-missing]").forEach(function (card) {
@@ -278,6 +448,7 @@
       const inc = card.querySelector(".inc");
       if (inc) inc.checked = false;
       card.classList.add("skipped");
+      markTouched(card.dataset.pos);
       updateCount();
     });
   });
@@ -375,24 +546,7 @@
     });
   });
 
-  document.querySelectorAll("[data-accept]").forEach(function (b) {
-    b.addEventListener("click", function () {
-      const inc = incFor(b.dataset.accept);
-      if (inc) inc.checked = true;
-      const card = b.closest(".fuzzycard");
-      if (card) card.classList.remove("rejected");
-      updateCount();
-    });
-  });
-  document.querySelectorAll("[data-reject]").forEach(function (b) {
-    b.addEventListener("click", function () {
-      const inc = incFor(b.dataset.reject);
-      if (inc) inc.checked = false;
-      const card = b.closest(".fuzzycard");
-      if (card) card.classList.add("rejected");
-      updateCount();
-    });
-  });
+  document.querySelectorAll(".fuzzycard").forEach(wireFuzzyCard);
 
   const jsonBtn = document.querySelector("[data-json-toggle]");
   const jsonView = document.querySelector("[data-jsonview]");
@@ -404,7 +558,10 @@
   }
 
   document.querySelectorAll("input.inc").forEach(function (cb) {
-    cb.addEventListener("change", updateCount);
+    cb.addEventListener("change", function () {
+      markTouched(cb.value);   // toggling include/skip is an explicit touch
+      updateCount();
+    });
   });
   updateCount();
 

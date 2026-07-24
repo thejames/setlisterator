@@ -191,7 +191,10 @@ prefix) and whether it came from the artist's own tracks or a library-wide
 search. The summary **chips** above the table double as filters: click one
 (exact, fuzzy, multi-match, missing) to flash and highlight those rows, then
 click it again — or the **songs** total — to clear. The source **URL bar**
-links out to the show on setlist.fm in a new tab.
+links out to the show on setlist.fm in a new tab. The **Prefer album** dropdown
+re-matches multi-album songs to a chosen album in place; any row you've already
+touched (a hand-pick, an accepted fuzzy, a filled-in missing track) stays put
+and is marked, so switching albums never discards your edits.
 
 **Concerts** (under the navbar's **History ▾** menu) lists every show you've
 created, newest first. Each row can **Re-open** the setlist in Preview, link out

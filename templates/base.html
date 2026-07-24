@@ -141,6 +141,9 @@
     tr.row-marked td:first-child { box-shadow: inset 3px 0 0 var(--mark); }
     @keyframes rowflash { from { background: color-mix(in srgb, var(--mark) 45%, transparent); } }
     tr.row-flash td { animation: rowflash .9s ease-out; }
+    /* Sticky (touched) rows: an edited pencil in the number cell so it's legible
+       why the row held still when the preferred album changed. */
+    .num .sticky { margin-left: 4px; color: var(--accent); font-weight: 700; cursor: default; }
 
     /* Panels & tables */
     .panel { background: var(--panel); border: 1px solid var(--border);

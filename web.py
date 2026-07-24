@@ -193,35 +193,73 @@ def album_tracks(rating_key):
     return jsonify(tracks=tracks)
 
 
-@app.post("/preview")
-def preview():
-    """Match the setlist and show the result without creating anything."""
-    setlist_arg = (request.form.get("setlist") or "").strip()
-    name = (request.form.get("name") or "").strip() or None
-    # Absent (first preview) -> None -> auto-detect a cohesive album; present
-    # (incl. "" for "No preference") -> use it verbatim.
-    prefer_album = request.form.get("prefer_album")
-    if not setlist_arg:
-        return _error("Missing input", "Enter a setlist.fm URL or ID.", 400)
+def _parse_and_match(req):
+    """Shared read+match preamble for /preview and /rematch.
 
+    Parses the form, runs `gather_matches`, and classifies any failure. Returns
+    `(result, err)` where `err` is None on success or a `(kind, message)` pair —
+    the caller renders whichever shape (HTML error page vs JSON) its route needs.
+    `prefer_album` absent (first preview) -> None -> auto-detect a cohesive
+    album; present (incl. "" for "No preference") -> used verbatim.
+    """
+    setlist_arg = (req.form.get("setlist") or "").strip()
+    name = (req.form.get("name") or "").strip() or None
+    prefer_album = req.form.get("prefer_album")
+    if not setlist_arg:
+        return None, ("input", "Enter a setlist.fm URL or ID.")
     try:
         config = core.load_config()
         setlist_id = core.parse_setlist_id(setlist_arg)
-        result = core.gather_matches(config, setlist_id, name, prefer_album)
+        return core.gather_matches(config, setlist_id, name, prefer_album), None
     except core.ConfigError as exc:
-        return _error("Configuration needed", str(exc))
+        return None, ("config", str(exc))
     except ValueError as exc:
-        return _error("Couldn't read that setlist", str(exc), 400)
+        return None, ("value", str(exc))
     except core.SetlistError as exc:
-        return _error("Setlist problem", str(exc))
+        return None, ("setlist", str(exc))
     except core.PlexError as exc:
-        return _error("Plex problem", str(exc))
+        return None, ("plex", str(exc))
+
+
+@app.post("/preview")
+def preview():
+    """Match the setlist and show the result without creating anything."""
+    result, err = _parse_and_match(request)
+    if err:
+        kind, msg = err
+        titles = {"input": ("Missing input", 400),
+                  "config": ("Configuration needed", 200),
+                  "value": ("Couldn't read that setlist", 400),
+                  "setlist": ("Setlist problem", 200),
+                  "plex": ("Plex problem", 200)}
+        title, status = titles[kind]
+        return _error(title, msg, status)
 
     prior = core.load_history(core.history_path()).get(result["setlist_id"])
     return render_template(
         "preview.html", result=result, prior=prior, stats=_stats(result),
         missing_json=json.dumps(result["missing"]),
         fuzzy_json=json.dumps(result["fuzzy"]))
+
+
+@app.post("/rematch")
+def rematch():
+    """Re-match a setlist for a newly chosen preferred album, as JSON.
+
+    Backs the preview page's in-place "Prefer album" switch: it returns the
+    fresh per-song candidates so the client can re-order only the *untouched*
+    rows, leaving the user's touched selections sticky (see
+    docs/adr/0001-client-rematch-endpoint.md). This runs the same full match as
+    /preview — the candidate *set* per song is invariant across album choices;
+    only the ordering (hence the default pick) changes.
+    """
+    result, err = _parse_and_match(request)
+    if err:
+        kind, msg = err
+        status = 400 if kind in ("input", "config", "value") else 502
+        return jsonify(error=msg), status
+    return jsonify(songs=result["songs"],
+                   preferred_album=result.get("preferred_album", ""))
 
 
 @app.post("/create")

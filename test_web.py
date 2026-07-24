@@ -768,6 +768,41 @@ def test_preview_first_load_auto_detects_album(client, monkeypatch):
     assert captured["prefer_album"] is None
 
 
+def test_rematch_returns_songs_json(client, monkeypatch):
+    # The in-place album switch re-matches via /rematch and gets JSON back:
+    # every song, with its full candidate list, so the client can re-order
+    # untouched rows without a page reload.
+    captured = {}
+
+    def fake_gather(cfg, sid, name=None, prefer_album=None):
+        captured["prefer_album"] = prefer_album
+        captured["sid"] = sid
+        result = _preview_result()
+        result["preferred_album"] = "Suck on This (Live)"
+        return result
+
+    monkeypatch.setattr(core, "gather_matches", fake_gather)
+    resp = client.post("/rematch", data={
+        "setlist": "abc123", "name": "Primus",
+        "prefer_album": "Suck on This (Live)"})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert captured["prefer_album"] == "Suck on This (Live)"  # forwarded to core
+    assert captured["sid"] == "abc123"                        # parsed bare id
+    assert data["preferred_album"] == "Suck on This (Live)"
+    assert [s["position"] for s in data["songs"]] == [1, 2, 3]
+    # the multi-match song carries every candidate for the client re-order
+    jerry = next(s for s in data["songs"] if s["position"] == 2)
+    assert len(jerry["candidates"]) == 2
+    assert {c["rating_key"] for c in jerry["candidates"]} == {20, 21}
+
+
+def test_rematch_requires_input(client):
+    resp = client.post("/rematch", data={"prefer_album": ""})
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]
+
+
 # --- /attended (browse a user's "I was there" shows) -----------------------
 
 def test_attended_get_prefills_username(client, monkeypatch):
