@@ -55,3 +55,17 @@ Titles compare via `normalize_simple` / `normalize_aggressive` across four ranke
 - **Tests are network-free by design.** `test_setlist_to_plex.py` covers pure logic and the matcher; `test_web.py` monkeypatches `core.load_config` / `gather_matches` / `create_playlist` to exercise routing and rendering only. Keep new tests offline the same way. There's no lint step.
 - The web app is **local-only and unauthenticated** — it holds your Plex token and binds to `127.0.0.1`. Don't add anything that assumes it's safely network-exposed.
 - Version is CalVer (`YYYY.M.PATCH` in `pyproject.toml`); commits follow conventional-commit style.
+
+## Agent skills
+
+### Issue tracker
+
+Local markdown — issues and specs live as files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles, recorded as the `Status:` line in each issue file (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (created lazily by `/domain-modeling`). See `docs/agents/domain.md`.
