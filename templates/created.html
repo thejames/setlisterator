@@ -9,6 +9,10 @@
     <span style="color:var(--text);font-weight:600">“{{ name }}”</span>.
   </p>
 
+  {% if poster_warning %}
+  <div class="notice" style="text-align:left">{{ poster_warning }}</div>
+  {% endif %}
+
   {% if missing %}
   <div class="section-head" style="justify-content:center">
     <span class="dot red"></span><span class="t">Still missing ({{ missing|length }})</span>

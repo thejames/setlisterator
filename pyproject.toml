@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "setlisterator"
-version = "2026.7.1"
+version = "2026.7.2"
 description = "Create a Plex playlist from a setlist.fm show, and report what's missing — CLI + local web app"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -145,6 +145,19 @@
        why the row held still when the preferred album changed. */
     .num .sticky { margin-left: 4px; color: var(--accent); font-weight: 700; cursor: default; }
 
+    /* Optional playlist poster field (create + build + editor). */
+    .posterfield { margin: 18px 0 2px; }
+    .posterrow { display: flex; align-items: center; gap: 12px; margin: 8px 0 6px; }
+    .posterrow input[type=file] { max-width: 340px; font-size: 13px; }
+    .posterprev { width: 46px; height: 46px; object-fit: cover; border-radius: 8px;
+      border: 1px solid var(--border); }
+    .posternote { color: var(--accent); }
+    .posternote.bad { color: var(--red); }
+
+    /* One-shot notice banner (e.g. an editor save whose image didn't take). */
+    .notice { background: #E0A33C14; border: 1px solid #E0A33C3d; color: var(--text2);
+      border-radius: 10px; padding: 11px 14px; margin: 0 0 16px; font-size: 14px; }
+
     /* Panels & tables */
     .panel { background: var(--panel); border: 1px solid var(--border);
       border-radius: 14px; overflow: hidden; }

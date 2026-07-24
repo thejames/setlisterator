@@ -1075,10 +1075,21 @@ class _FakePlaylistObj:
         self.summary = None
         self.deleted = False
         self.retitled = None
+        self.poster_path = None       # filepath passed to uploadPoster
+        self.square_art_path = None   # filepath passed to uploadSquareArt
+        self.poster_fail = False      # set True to make uploadPoster raise
 
     @property
     def leafCount(self):
         return len(self._items)
+
+    def uploadPoster(self, url=None, filepath=None):
+        if self.poster_fail:
+            raise RuntimeError("poster upload boom")
+        self.poster_path = filepath
+
+    def uploadSquareArt(self, url=None, filepath=None):
+        self.square_art_path = filepath
 
     def items(self):
         return list(self._items)
@@ -1114,9 +1125,10 @@ class _FakePlaylistObj:
 
 
 class _FakeCreatePlex:
-    def __init__(self, playlists=()):
+    def __init__(self, playlists=(), poster_fail=False):
         self.created = None
         self._playlists = list(playlists)
+        self._poster_fail = poster_fail   # created playlists reject poster uploads
 
     def fetchItem(self, key):
         return _FakeTrack(f"track-{key}", "Phish", rating_key=int(key))
@@ -1127,6 +1139,7 @@ class _FakeCreatePlex:
     def createPlaylist(self, title, items=None):
         self.created = (title, list(items or []))
         pl = _FakePlaylistObj(title, rating_key=999, items=list(items or []))
+        pl.poster_fail = self._poster_fail
         self._playlists.append(pl)
         return pl
 
@@ -1137,13 +1150,14 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     hist = tmp_path / "history.json"
     monkeypatch.setattr(m, "history_path", lambda: hist)
 
-    name = m.create_playlist(
+    result = m.create_playlist(
         _CONFIG, "Phish - MSG", ["10", "11"],
         history_meta={"id": "abc123", "url": "u", "artist": "Phish",
                       "date": "2023-12-31", "missing": 1,
                       "missing_tracks": [{"artist": "Phish", "title": "Destiny Unbound"}]})
 
-    assert name == "Phish - MSG"
+    assert result.name == "Phish - MSG"
+    assert result.poster is None                # no image supplied -> no status
     assert fake.created[0] == "Phish - MSG"
     assert len(fake.created[1]) == 2          # two tracks fetched + added
     summary = fake._playlists[-1].summary       # rich, self-contained record
@@ -1292,11 +1306,12 @@ def test_set_playlist_applies_rename_membership_and_order(monkeypatch, tmp_path)
                                   "playlist_name": "Old Name", "matched": 3}})
 
     # Drop track 2, keep 3 then 1 (reordered), add new track 4.
-    title, count = m.set_playlist(_CONFIG, "999", "New Name", ["3", "1", "4"])
+    title, count, poster = m.set_playlist(_CONFIG, "999", "New Name", ["3", "1", "4"])
 
     assert title == "New Name"
     assert pl.title == "New Name"                          # renamed in Plex
     assert count == 3
+    assert poster is None                                  # no image supplied
     assert [t.ratingKey for t in pl.items()] == [3, 1, 4]  # exact desired order
     saved = m.load_history(hist)
     assert saved["abc"]["playlist_name"] == "New Name"     # history entry refreshed
@@ -1327,6 +1342,78 @@ def test_create_playlist_manual_records_without_summary(monkeypatch, tmp_path):
     saved = m.load_history(hist)
     assert saved["manual:abc"]["source"] == "manual"
     assert saved["manual:abc"]["playlist_name"] == "My Mix"
+
+
+# --- playlist poster (set_playlist_poster + create/set_playlist wiring) ------
+
+def test_check_poster_accepts_allowed_types():
+    assert m.check_poster("image/jpeg", 1000) == (".jpg", None)
+    assert m.check_poster("image/png", 1000) == (".png", None)
+    assert m.check_poster("image/webp", 1000) == (".webp", None)
+
+
+def test_check_poster_rejects_type_and_size():
+    assert m.check_poster("text/plain", 10) == (None, "unsupported type")
+    assert m.check_poster("", 10) == (None, "unsupported type")
+    assert m.check_poster("image/png", m.POSTER_MAX_BYTES + 1) == (None, "too large")
+    # Boundary: exactly at the ceiling is allowed.
+    assert m.check_poster("image/png", m.POSTER_MAX_BYTES) == (".png", None)
+
+
+def test_set_playlist_poster_uploads_both_and_returns_true():
+    pl = _FakePlaylistObj("PL", rating_key=1)
+    assert m.set_playlist_poster(pl, "/tmp/cover.jpg") is True
+    assert pl.poster_path == "/tmp/cover.jpg"
+    assert pl.square_art_path == "/tmp/cover.jpg"   # square art set too
+
+
+def test_set_playlist_poster_failsoft_returns_false():
+    pl = _FakePlaylistObj("PL", rating_key=1)
+    pl.poster_fail = True
+    # A failing poster upload is swallowed (no raise) and reported as False;
+    # square art is still attempted best-effort.
+    assert m.set_playlist_poster(pl, "/tmp/cover.jpg") is False
+    assert pl.poster_path is None
+    assert pl.square_art_path == "/tmp/cover.jpg"
+
+
+def test_create_playlist_sets_poster(monkeypatch, tmp_path):
+    fake = _FakeCreatePlex()
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: fake)
+    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "history.json")
+
+    result = m.create_playlist(_CONFIG, "PL", ["1"], poster_path="/tmp/cover.png")
+
+    assert result.poster is True
+    assert fake._playlists[-1].poster_path == "/tmp/cover.png"
+
+
+def test_create_playlist_poster_failsoft_still_creates(monkeypatch, tmp_path):
+    fake = _FakeCreatePlex(poster_fail=True)
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: fake)
+    hist = tmp_path / "history.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+
+    result = m.create_playlist(_CONFIG, "PL", ["1"], history_meta={"id": "z"},
+                               poster_path="/tmp/cover.png")
+
+    assert result.name == "PL"
+    assert result.poster is False                  # attempted, failed -> warn
+    assert fake.created[0] == "PL"                 # playlist still created
+    assert m.load_history(hist)["z"]["playlist_name"] == "PL"   # history recorded
+
+
+def test_set_playlist_sets_poster(monkeypatch, tmp_path):
+    pl = _FakePlaylistObj("Old", rating_key=999,
+                          items=[_FakeTrack("A", "x", rating_key=1)])
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
+    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "history.json")
+
+    title, count, poster = m.set_playlist(_CONFIG, "999", "Old", ["1"],
+                                          poster_path="/tmp/cover.webp")
+
+    assert poster is True
+    assert pl.poster_path == "/tmp/cover.webp"
 
 
 def test_playlist_summary_full_record():

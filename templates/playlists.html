@@ -3,6 +3,8 @@
 {% block content %}
 <h2>Playlists ({{ playlists|length }})</h2>
 
+{% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+
 {% if counts.all %}
 {# View filter: link-chips reload the page with ?view=; counts show what each
    view holds. Concerts borrows the green "exact" accent, built the blue

@@ -394,6 +394,44 @@
     updateCount();
   }
 
+  // --- optional poster upload (create + build + editor) --------------------
+  // Progressive enhancement over a bare <input type=file>: a thumbnail preview
+  // plus a client-side type/size pre-check so an obviously-bad file is flagged
+  // before submit. The server is still the real safety net (best-effort, never
+  // blocks the save) — this just gives faster feedback. Mirrors the server's
+  // JPEG/PNG/WebP + 10 MB rule.
+  const POSTER_TYPES = ["image/jpeg", "image/png", "image/webp"];
+  const POSTER_MAX = 10 * 1024 * 1024;
+  function posterNote(field, text, bad) {
+    const note = field.querySelector("[data-poster-note]");
+    if (!note) return;
+    note.textContent = text || "";
+    note.hidden = !text;
+    note.classList.toggle("bad", !!bad);
+  }
+  function onPosterPick(input) {
+    const field = input.closest("[data-poster-field]");
+    const prev = field && field.querySelector("[data-poster-preview]");
+    const file = input.files && input.files[0];
+    if (prev) { prev.hidden = true; prev.removeAttribute("src"); }
+    if (!field) return;
+    if (!file) { posterNote(field, ""); return; }
+    if (POSTER_TYPES.indexOf(file.type) === -1) {
+      posterNote(field, "That’s not a JPEG, PNG or WebP — it won’t be used.", true);
+      return;
+    }
+    if (file.size > POSTER_MAX) {
+      posterNote(field, "That image is over 10 MB — it won’t be used.", true);
+      return;
+    }
+    posterNote(field, "");
+    if (prev) {
+      const reader = new FileReader();
+      reader.onload = function () { prev.src = reader.result; prev.hidden = false; };
+      reader.readAsDataURL(file);
+    }
+  }
+
   // --- wiring --------------------------------------------------------------
   document.querySelectorAll("form[data-loading]").forEach(function (form) {
     form.addEventListener("submit", function () {
@@ -433,6 +471,10 @@
   document.querySelectorAll("[data-album-select]").forEach(function (sel) {
     sel.dataset.prev = sel.value;   // last album that matched, for error revert
     sel.addEventListener("change", function () { rematchAlbum(sel); });
+  });
+
+  document.querySelectorAll("[data-poster-input]").forEach(function (input) {
+    input.addEventListener("change", function () { onPosterPick(input); });
   });
 
   document.querySelectorAll("[data-missing]").forEach(function (card) {

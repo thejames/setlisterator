@@ -196,6 +196,13 @@ re-matches multi-album songs to a chosen album in place; any row you've already
 touched (a hand-pick, an accepted fuzzy, a filled-in missing track) stays put
 and is marked, so switching albums never discards your edits.
 
+**Playlist image** (optional): pick a JPEG/PNG/WebP (up to 10 MB) to set as the
+playlist's poster in Plex — no need to add it through the Plex UI afterward. It
+works the same on the **Build** page and when editing an existing playlist
+(there, leaving the field empty keeps the current image). The image is
+best-effort: if it can't be set, the playlist is still created/saved and you're
+told, so a bad file never costs you your work.
+
 **Concerts** (under the navbar's **History ▾** menu) lists every show you've
 created, newest first. Each row can **Re-open** the setlist in Preview, link out
 to its setlist.fm source, or **Update** the existing playlist: it re-matches the
