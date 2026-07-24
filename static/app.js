@@ -398,10 +398,15 @@
   // Progressive enhancement over a bare <input type=file>: a thumbnail preview
   // plus a client-side type/size pre-check so an obviously-bad file is flagged
   // before submit. The server is still the real safety net (best-effort, never
-  // blocks the save) — this just gives faster feedback. Mirrors the server's
-  // JPEG/PNG/WebP + 10 MB rule.
-  const POSTER_TYPES = ["image/jpeg", "image/png", "image/webp"];
-  const POSTER_MAX = 10 * 1024 * 1024;
+  // blocks the save) — this just gives faster feedback. The accepted types and
+  // size cap are read from the field's data-attrs (rendered from core's single
+  // source), so this pre-check can't drift from the server's own validation.
+  function posterPolicy(field) {
+    const types = (field.getAttribute("data-poster-accept") || "").split(",")
+      .map(function (s) { return s.trim(); }).filter(Boolean);
+    return { types: types, max: Number(field.getAttribute("data-poster-max")) || 0 };
+  }
+  function mbLabel(bytes) { return Math.round(bytes / (1024 * 1024)) + " MB"; }
   function posterNote(field, text, bad) {
     const note = field.querySelector("[data-poster-note]");
     if (!note) return;
@@ -416,12 +421,13 @@
     if (prev) { prev.hidden = true; prev.removeAttribute("src"); }
     if (!field) return;
     if (!file) { posterNote(field, ""); return; }
-    if (POSTER_TYPES.indexOf(file.type) === -1) {
+    const pol = posterPolicy(field);
+    if (pol.types.length && pol.types.indexOf(file.type) === -1) {
       posterNote(field, "That’s not a JPEG, PNG or WebP — it won’t be used.", true);
       return;
     }
-    if (file.size > POSTER_MAX) {
-      posterNote(field, "That image is over 10 MB — it won’t be used.", true);
+    if (pol.max && file.size > pol.max) {
+      posterNote(field, "That image is over " + mbLabel(pol.max) + " — it won’t be used.", true);
       return;
     }
     posterNote(field, "");

@@ -32,6 +32,15 @@ def _error(title, message, status=200):
     return render_template("error.html", title=title, message=message), status
 
 
+@app.context_processor
+def _inject_poster_policy():
+    """Expose core's poster policy to every template (single source), so the
+    file input's accept + size hint and the JS pre-check all derive from it."""
+    return {"poster_policy": {"accept": core.POSTER_ACCEPT,
+                              "max_bytes": core.POSTER_MAX_BYTES,
+                              "max_label": core.POSTER_MAX_LABEL}}
+
+
 # Poster upload: an optional browser image saved to a temp file for the core
 # uploader. Best-effort (ADR 0002) — an unusable file never blocks a save; we
 # skip it and warn. Deliberately NOT capped via Flask's MAX_CONTENT_LENGTH,
@@ -611,8 +620,8 @@ def playlist_save(rating_key):
     poster_path, prewarn = _take_poster_upload(request)
     try:
         config = core.load_config()
-        _title, _count, poster = core.set_playlist(
-            config, rating_key, name, rating_keys, poster_path)
+        result = core.set_playlist(config, rating_key, name, rating_keys,
+                                   poster_path)
     except core.ConfigError as exc:
         return _error("Configuration needed", str(exc))
     except core.PlexError as exc:
@@ -622,7 +631,7 @@ def playlist_save(rating_key):
 
     # The editor redirects (no result page), so a poster hiccup surfaces as a
     # one-shot notice banner on the Playlists page rather than an inline block.
-    if _poster_warned(prewarn, poster):
+    if _poster_warned(prewarn, result.poster):
         return redirect(url_for("playlists", notice="poster"))
     return redirect(url_for("playlists"))
 

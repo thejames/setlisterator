@@ -3,14 +3,16 @@
    thumbnail preview + client-side type/size pre-check; the bare input works
    fine with no JS. The image is best-effort (ADR 0002) — the server never
    blocks a save over it. On the editor an empty field keeps the current image. #}
-<div class="posterfield" data-poster-field>
+<div class="posterfield" data-poster-field
+     data-poster-accept="{{ poster_policy.accept }}"
+     data-poster-max="{{ poster_policy.max_bytes }}">
   <div class="label">Playlist image <span class="sub">optional</span></div>
   <div class="posterrow">
-    <input type="file" name="poster" accept="image/jpeg,image/png,image/webp"
+    <input type="file" name="poster" accept="{{ poster_policy.accept }}"
            data-poster-input aria-label="Playlist image">
     <img class="posterprev" data-poster-preview alt="Selected image preview" hidden>
   </div>
   <div class="sub posternote" data-poster-note hidden></div>
-  <div class="sub">JPEG, PNG or WebP, up to 10&nbsp;MB — sets the playlist’s
-    image in Plex.</div>
+  <div class="sub">JPEG, PNG or WebP, up to&nbsp;{{ poster_policy.max_label }} —
+    sets the playlist’s image in Plex.</div>
 </div>

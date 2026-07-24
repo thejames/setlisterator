@@ -567,6 +567,15 @@ def test_build_page_renders(client):
     assert 'name="name"' in body              # the playlist-name field
 
 
+def test_poster_field_policy_derives_from_core(client):
+    # The file input's accept + size cap come from core's single source, so the
+    # template and JS pre-check can't drift from server-side validation.
+    body = client.get("/build").data.decode()
+    assert f'accept="{core.POSTER_ACCEPT}"' in body
+    assert f'data-poster-max="{core.POSTER_MAX_BYTES}"' in body
+    assert core.POSTER_MAX_LABEL in body      # human size hint, same source
+
+
 def test_build_creates_playlist(client, monkeypatch):
     captured = {}
 
@@ -677,7 +686,7 @@ def test_playlist_save_calls_core_and_redirects(client, monkeypatch):
     def fake_set(cfg, rating_key, name, rating_keys, poster_path=None):
         captured.update(key=rating_key, name=name, keys=rating_keys,
                         poster_path=poster_path)
-        return name, len(rating_keys), None
+        return core.SetResult(name, len(rating_keys), None)
 
     monkeypatch.setattr(core, "set_playlist", fake_set)
     resp = client.post("/playlists/999/edit", data={
@@ -784,7 +793,7 @@ def test_editor_forwards_poster_and_warns_on_redirect(client, monkeypatch):
 
     def fake_set(cfg, key, name, keys, poster_path=None):
         captured["poster_path"] = poster_path
-        return name, len(keys), False        # poster upload failed
+        return core.SetResult(name, len(keys), False)   # poster upload failed
 
     monkeypatch.setattr(core, "set_playlist", fake_set)
     resp = client.post("/playlists/999/edit", data={

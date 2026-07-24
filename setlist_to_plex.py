@@ -442,11 +442,14 @@ def _track_album(track):
 # 'scoped' (the artist's own tracks) or 'global' (fallback title search).
 Match = namedtuple("Match", "track quality tier source")
 
-# Result of a playlist create. ``poster`` is None when no image was supplied,
-# True when the poster upload succeeded, False when it was attempted but failed
-# (best-effort — see ADR 0002). The web layer keys its "couldn't set the image"
-# warning off a False here; the CLI never supplies an image, so it stays None.
+# Result of a playlist create/edit. ``poster`` is None when no image was
+# supplied, True when the poster upload succeeded, False when it was attempted
+# but failed (best-effort — see ADR 0002). The web layer keys its "couldn't set
+# the image" warning off a False here; the CLI never supplies an image, so it
+# stays None. CreateResult (create) and SetResult (in-place edit) name their
+# results symmetrically so callers read fields instead of tuple positions.
 CreateResult = namedtuple("CreateResult", "name poster")
+SetResult = namedtuple("SetResult", "name count poster")
 
 # Human-readable names for the _title_rank tiers (index == rank).
 TIER_NAMES = ("exact", "loose", "medley", "prefix")
@@ -1189,6 +1192,12 @@ def _playlist_summary(history_meta, added_count, track_count=None):
 POSTER_MAX_BYTES = 10 * 1024 * 1024   # ~10 MB
 _POSTER_EXTENSIONS = {"image/jpeg": ".jpg", "image/png": ".png",
                       "image/webp": ".webp"}
+# Derived once so the <input accept> string and the human size hint stay in
+# lockstep with the validation above. The web layer threads these to the
+# template and (via DOM data-attrs) the JS pre-check, so no build step is
+# needed and the three consumers can't drift from this single source.
+POSTER_ACCEPT = ",".join(_POSTER_EXTENSIONS)          # image/jpeg,image/png,image/webp
+POSTER_MAX_LABEL = f"{POSTER_MAX_BYTES // (1024 * 1024)} MB"
 
 
 def check_poster(mimetype, size):
@@ -1480,9 +1489,9 @@ def set_playlist(config, rating_key, name, rating_keys, poster_path=None):
 
     ``rating_keys`` is the desired ordered track list (deduped like
     create_playlist). ``poster_path`` is an optional local image file to set as
-    the playlist poster (best-effort — never undoes the edit). Returns
-    ``(final_title, track_count, poster)`` where ``poster`` is None when no
-    image was supplied, else the upload's success. Raises PlexError.
+    the playlist poster (best-effort — never undoes the edit). Returns a
+    SetResult (name + track count + poster status, None when no image was
+    supplied). Raises PlexError.
     """
     try:
         plex = connect_plex(config["plex_baseurl"], config["plex_token"])
@@ -1550,7 +1559,7 @@ def set_playlist(config, rating_key, name, rating_keys, poster_path=None):
     poster = set_playlist_poster(playlist, poster_path) if poster_path else None
     _update_history_playlist(getattr(playlist, "ratingKey", None),
                              final_title, count)
-    return final_title, count, poster
+    return SetResult(final_title, count, poster)
 
 
 def backfill_history(config):
