@@ -13,8 +13,11 @@
   <input type="hidden" name="name" value="{{ playlist.title }}">
   <input type="hidden" name="url" value="{{ result.show.url }}">
   <input type="hidden" name="artist" value="{{ result.show.artist }}">
+  <input type="hidden" name="venue" value="{{ result.show.venue }}">
+  <input type="hidden" name="city" value="{{ result.show.city }}">
   <input type="hidden" name="date" value="{{ result.show.date }}">
   <input type="hidden" name="missing_json" value="{{ missing_json }}">
+  <input type="hidden" name="songs_json" value="{{ songs_json }}">
 
   <div class="panel" style="margin-top:18px">
     <table class="tracktable">

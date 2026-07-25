@@ -307,6 +307,7 @@ def preview():
     return render_template(
         "preview.html", result=result, prior=prior, stats=_stats(result),
         missing_json=json.dumps(result["missing"]),
+        songs_json=_songs_json(result),
         fuzzy_json=json.dumps(result["fuzzy"]))
 
 
@@ -383,22 +384,54 @@ def _picked_rating_keys():
     return keys
 
 
+def _songs_json(result):
+    """core.song_map as compact rows, for the hidden field that carries it."""
+    return json.dumps([[s["position"], s["title"], s["album"], s["rating_key"]]
+                       for s in core.song_map(result)])
+
+
+def _songs_from_form():
+    """Read back the per-song map, applying the user's selections.
+
+    A song the user re-pointed (version dropdown or row search) submits a
+    ``pick_<position>`` that supersedes the key carried in ``songs_json``. Rows
+    the current page didn't render keep theirs — the Update page only lists
+    songs not yet in the playlist, so most rows come back untouched.
+    """
+    try:
+        rows = json.loads(request.form.get("songs_json") or "[]")
+    except ValueError:
+        return []
+    songs = []
+    for row in rows:
+        if len(row) < 2:
+            continue
+        position, title = row[0], row[1]
+        picked = (request.form.get(f"pick_{position}") or "").strip()
+        key = picked or (row[3] if len(row) > 3 else None)
+        songs.append({
+            "position": position,
+            "title": title,
+            "album": row[2] if len(row) > 2 else "",
+            "rating_key": str(key) if key not in (None, "") else None,
+        })
+    return songs
+
+
 def _history_meta_from_form(setlist_id):
     """Build history_meta (incl. missing_tracks) from the hidden form fields."""
     try:
         missing = json.loads(request.form.get("missing_json") or "[]")
     except ValueError:
         missing = []
-    try:
-        song_count = int(request.form.get("song_count") or 0)
-    except ValueError:
-        song_count = 0
     return {
         "id": setlist_id,
         "url": request.form.get("url", ""),
         "artist": request.form.get("artist", ""),
+        "venue": request.form.get("venue", ""),
+        "city": request.form.get("city", ""),
         "date": request.form.get("date", ""),
-        "song_count": song_count,
+        "songs": _songs_from_form(),
         "missing": len(missing),
         # missing rows are [position, artist, title, album?]; carry position+album.
         "missing_tracks": [
@@ -459,7 +492,8 @@ def update_preview():
     return render_template(
         "update.html", result=result, playlist=playlist, new_songs=new_songs,
         playlist_rating_key=getattr(playlist, "ratingKey", "") or "",
-        missing_json=json.dumps(result["missing"]))
+        missing_json=json.dumps(result["missing"]),
+        songs_json=_songs_json(result))
 
 
 @app.post("/update")
