@@ -303,8 +303,9 @@ def test_preview_renders_matches(client, monkeypatch):
     # category chips highlight their rows; rows carry a status for the filter
     assert 'data-chip-filter="fuzzy"' in body
     assert 'data-status="exact"' in body
-    # the create form carries the true setlist length for the full-run check
-    assert 'name="song_count" value="3"' in body   # fixture has 3 songs
+    # the create form carries the per-song map the Plex summary derives from
+    assert 'name="songs_json"' in body
+    assert 'name="venue"' in body and 'name="city"' in body
     # spec elements: URL bar + Re-import, custom Add box, count-in-button
     assert 'class="urlbar"' in body and "Re-import" in body
     # URL bar links out to setlist.fm in a new tab
@@ -523,20 +524,91 @@ def test_create_excludes_unchecked_rows(client, monkeypatch):
     assert captured["keys"] == ["10", "30"]   # row 2 excluded, order preserved
 
 
-def test_create_passes_song_count_for_full_run(client, monkeypatch):
-    # The true setlist length rides along in history_meta so the Plex summary
-    # can tell an excluded song from a full run.
+def test_create_passes_song_map_with_picks_applied(client, monkeypatch):
+    # The per-song map the Plex summary is derived from: every setlist song,
+    # with the user's chosen version overriding the matcher's default.
     captured = {}
     monkeypatch.setattr(core, "create_playlist",
                         lambda cfg, name, keys, meta, poster=None:
                         captured.update(meta=meta) or core.CreateResult(name, None))
     resp = client.post("/create", data={
         "name": "Show", "setlist_id": "abc",
-        "include": ["1"], "pick_1": "10",
-        "missing_json": "[]", "fuzzy_json": "[]", "song_count": "6",
+        "artist": "Primus", "venue": "TD Amp", "city": "Boston",
+        "date": "2026-06-16",
+        "include": ["1"],            # song 2 matched but was unchecked
+        "pick_1": "10",
+        "pick_2": "21",              # alternate version chosen for song 2
+        "songs_json": '[[1, "Wynona", "Sailing", 10], [2, "Tommy", "Frizzle", 20],'
+                      ' [3, "Jilly\'s on Smack", "Antipop", null]]',
+        "missing_json": '[[3, "Primus", "Jilly\'s on Smack", "Antipop"]]',
+        "fuzzy_json": "[]",
     })
     assert resp.status_code == 200
-    assert captured["meta"]["song_count"] == 6
+    meta = captured["meta"]
+    assert (meta["artist"], meta["venue"], meta["city"]) == (
+        "Primus", "TD Amp", "Boston")            # show header fields carried
+    assert meta["songs"] == [
+        {"position": 1, "title": "Wynona", "album": "Sailing", "rating_key": "10"},
+        {"position": 2, "title": "Tommy", "album": "Frizzle", "rating_key": "21"},
+        {"position": 3, "title": "Jilly's on Smack", "album": "Antipop",
+         "rating_key": None},
+    ]
+
+
+def test_song_map_survives_a_malformed_songs_json(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(core, "create_playlist",
+                        lambda cfg, name, keys, meta, poster=None:
+                        captured.update(meta=meta) or core.CreateResult(name, None))
+    resp = client.post("/create", data={
+        "name": "Show", "setlist_id": "abc", "include": ["1"], "pick_1": "10",
+        "songs_json": "not json at all",
+        "missing_json": "[]", "fuzzy_json": "[]",
+    })
+    assert resp.status_code == 200
+    assert captured["meta"]["songs"] == []     # no map -> core skips the summary
+
+
+def test_update_carries_song_map(client, monkeypatch):
+    captured = {}
+
+    def fake_add(cfg, key, name, rating_keys, history_meta=None):
+        captured["meta"] = history_meta
+        return name, len(rating_keys)
+
+    monkeypatch.setattr(core, "add_to_playlist", fake_add)
+    resp = client.post("/update", data={
+        "name": "Show", "setlist_id": "abc", "playlist_rating_key": "999",
+        "artist": "Primus", "venue": "TD Amp", "city": "Boston",
+        "include": ["2"], "pick_2": "21",
+        # Song 1 is already in the playlist, so this page never rendered a
+        # pick for it; its default key must still reach the map.
+        "songs_json": '[[1, "Wynona", "Sailing", 10], [2, "Tommy", "Frizzle", 20]]',
+        "missing_json": "[]",
+    })
+    assert resp.status_code == 200
+    assert [s["rating_key"] for s in captured["meta"]["songs"]] == ["10", "21"]
+    assert captured["meta"]["venue"] == "TD Amp"
+
+
+def test_create_declines_an_unchecked_song_rather_than_losing_it(client, monkeypatch):
+    # The map is the whole setlist, so a song left out of "include" still
+    # reaches core — that's what lets the summary call it declined, not missing.
+    captured = {}
+    monkeypatch.setattr(core, "create_playlist",
+                        lambda cfg, name, keys, meta, poster=None:
+                        captured.update(meta=meta, keys=keys)
+                        or core.CreateResult(name, None))
+    resp = client.post("/create", data={
+        "name": "Show", "setlist_id": "abc",
+        "include": ["1"], "pick_1": "10", "pick_2": "20",
+        "songs_json": '[[1, "A", "", 10], [2, "B", "", 20]]',
+        "missing_json": "[]", "fuzzy_json": "[]",
+    })
+    assert resp.status_code == 200
+    assert captured["keys"] == ["10"]                    # only song 1 added
+    assert len(captured["meta"]["songs"]) == 2           # but both are mapped
+    assert captured["meta"]["songs"][1]["rating_key"] == "20"
 
 
 def test_create_requires_keys(client):

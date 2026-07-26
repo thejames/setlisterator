@@ -473,6 +473,33 @@ def test_main_requires_setlist_or_history():
         m.main([])
 
 
+def test_main_writes_a_summary_for_a_cli_created_playlist(monkeypatch, tmp_path):
+    # The CLI is a first-class surface: creating from the command line must
+    # leave the same self-contained record on the playlist as the web app.
+    fake = _FakeCreatePlex()
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: fake)
+    monkeypatch.setattr(m, "load_config", lambda: _CONFIG)
+    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "h.json")
+    monkeypatch.setattr(m, "gather_matches", lambda cfg, sid, name=None: {
+        "setlist_id": sid, "playlist_name": "Primus - The Fillmore",
+        "show": {"artist": "Primus", "venue": "The Fillmore",
+                 "city": "San Francisco", "date": "2023-12-31", "url": "u"},
+        "songs": [{"position": 1, "title": "Wynona", "matched": True,
+                   "rating_key": 10, "release": "Punchbowl"},
+                  {"position": 2, "title": "Jilly's on Smack", "matched": False,
+                   "release": "Antipop"}],
+        "matched": [{"rating_key": 10}],
+        "missing": [(2, "Primus", "Jilly's on Smack", "Antipop")],
+        "fuzzy": []})
+
+    assert m.main(["abc123", "--quiet"]) == m.EXIT_OK
+
+    summary = fake._playlists[-1].summary
+    assert "Primus · The Fillmore, San Francisco" in summary
+    assert "2 songs · 1 added · 1 missing." in summary
+    assert "  • #2 Jilly's on Smack — Antipop" in summary
+
+
 # --- backfill_history / --backfill -----------------------------------------
 
 def test_backfill_history_fills_count_only_entries(monkeypatch, tmp_path):
@@ -1078,6 +1105,7 @@ class _FakePlaylistObj:
         self.poster_path = None       # filepath passed to uploadPoster
         self.square_art_path = None   # filepath passed to uploadSquareArt
         self.poster_fail = False      # set True to make uploadPoster raise
+        self.summary_fail = False     # set True to make editSummary raise
 
     @property
     def leafCount(self):
@@ -1121,6 +1149,8 @@ class _FakePlaylistObj:
         self.title = title
 
     def editSummary(self, summary, locked=True):
+        if self.summary_fail:
+            raise RuntimeError("summary write boom")
         self.summary = summary
 
 
@@ -1153,7 +1183,14 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     result = m.create_playlist(
         _CONFIG, "Phish - MSG", ["10", "11"],
         history_meta={"id": "abc123", "url": "u", "artist": "Phish",
+                      "venue": "MSG", "city": "New York",
                       "date": "2023-12-31", "missing": 1,
+                      "songs": [{"position": 1, "title": "Chalk Dust Torture",
+                                 "album": "", "rating_key": 10},
+                                {"position": 2, "title": "Tweezer",
+                                 "album": "", "rating_key": 11},
+                                {"position": 3, "title": "Destiny Unbound",
+                                 "album": "", "rating_key": None}],
                       "missing_tracks": [{"artist": "Phish", "title": "Destiny Unbound"}]})
 
     assert result.name == "Phish - MSG"
@@ -1161,8 +1198,9 @@ def test_create_playlist_creates_and_records_history(monkeypatch, tmp_path):
     assert fake.created[0] == "Phish - MSG"
     assert len(fake.created[1]) == 2          # two tracks fetched + added
     summary = fake._playlists[-1].summary       # rich, self-contained record
-    assert "2 of 3 songs added." in summary      # 2 added + 1 missing
-    assert "Missing (1):" in summary
+    assert "Phish · MSG, New York" in summary    # show header
+    assert "3 songs · 2 added · 1 missing." in summary
+    assert "Missing (1) — not in your library:" in summary
     assert "Destiny Unbound" in summary
     assert "Source: u" in summary                # setlist.fm url in the summary
     saved = m.load_history(hist)
@@ -1325,8 +1363,12 @@ def test_set_playlist_missing_raises(monkeypatch):
 
 
 def test_playlist_summary_manual_is_empty():
-    # A manually-built playlist gets no setlist-shaped summary.
-    assert m._playlist_summary({"source": "manual", "id": "manual:x"}, 3, 3) == ""
+    # A manually-built playlist gets no setlist-shaped summary, even if a map
+    # somehow rode along with it.
+    assert m._playlist_summary(
+        {"source": "manual", "id": "manual:x",
+         "songs": [{"position": 1, "title": "A", "rating_key": 51}]},
+        member_keys={"51"}) == ""
 
 
 def test_create_playlist_manual_records_without_summary(monkeypatch, tmp_path):
@@ -1416,20 +1458,43 @@ def test_set_playlist_sets_poster(monkeypatch, tmp_path):
     assert pl.poster_path == "/tmp/cover.webp"
 
 
+def _song(position, title, album="", rating_key=None):
+    """One row of the per-song map stored in history."""
+    return {"position": position, "title": title, "album": album,
+            "rating_key": rating_key}
+
+
+def _boom(name):
+    """A stand-in that fails the test if the real function is ever called."""
+    def _fail(*args, **kwargs):
+        raise AssertionError(f"{name}() must not be called on this path")
+    return _fail
+
+
+_SHOW = {"artist": "Primus", "venue": "The Fillmore", "city": "San Francisco",
+         "date": "2023-12-31", "url": "https://www.setlist.fm/x"}
+
+
 def test_playlist_summary_full_record():
+    # One song of each state: added (in the playlist), declined (owned but not
+    # in it), missing (not in the library at all).
     summary = m._playlist_summary(
-        {"url": "https://www.setlist.fm/x",
-         "missing_tracks": [
-             {"position": 4, "artist": "Primus", "title": "The Ol' Grizz",
-              "album": "A Handful of Nuggs"},
-             {"position": 11, "artist": "Primus", "title": "Hello Skinny"}]},
-        added_count=10)
+        {**_SHOW, "songs": [
+            _song(1, "Jerry Was a Race Car Driver", "Sailing the Seas", 51),
+            _song(4, "The Ol' Grizz", "A Handful of Nuggs", 52),
+            _song(11, "Hello Skinny", "")]},
+        member_keys={"51"})
     assert summary.splitlines() == [
-        "10 of 12 songs added.",
+        "Primus · The Fillmore, San Francisco",
+        "2023-12-31",
         "",
-        "Missing (2):",
-        "  • #4 The Ol' Grizz — A Handful of Nuggs",   # setlist position shown
+        "3 songs · 1 added · 1 declined · 1 missing.",
+        "",
+        "Missing (1) — not in your library:",
         "  • #11 Hello Skinny",
+        "",
+        "Declined (1) — in your library, not added:",
+        "  • #4 The Ol' Grizz — A Handful of Nuggs",   # setlist position shown
         "",
         "Source: https://www.setlist.fm/x",
         "Created by Setlist-er-ator. 🤘",
@@ -1437,13 +1502,19 @@ def test_playlist_summary_full_record():
 
 
 def test_playlist_summary_full_run_when_complete():
-    summary = m._playlist_summary({"url": "u", "missing_tracks": []}, added_count=14)
+    summary = m._playlist_summary(
+        {**_SHOW, "songs": [_song(i, f"Song {i}", "", 50 + i)
+                            for i in range(1, 15)]},
+        member_keys={str(50 + i) for i in range(1, 15)})
     assert summary.splitlines() == [
-        "14 of 14 songs added.",
+        "Primus · The Fillmore, San Francisco",
+        "2023-12-31",
+        "",
+        "14 songs · 14 added.",
         "",
         "This is the full run of the show.",
         "",
-        "Source: u",
+        "Source: https://www.setlist.fm/x",
         "Created by Setlist-er-ator. 🤘",
     ]
 
@@ -1453,67 +1524,99 @@ def test_playlist_summary_counts_songs_not_deduped_tracks():
     # tracks (e.g. a covers band's bass-solo intro matching its parent song).
     # The summary must report 6 songs (not 4) and still call it a full run,
     # while noting the smaller unique-track count so Plex's item count tracks.
-    summary = m._playlist_summary(
-        {"url": "u", "missing_tracks": []}, added_count=6, track_count=4)
-    assert summary.splitlines() == [
-        "6 of 6 songs added (4 unique tracks; some songs share a recording).",
-        "",
-        "This is the full run of the show.",
-        "",
-        "Source: u",
-        "Created by Setlist-er-ator. 🤘",
-    ]
-
-
-def test_playlist_summary_excluded_song_is_not_a_full_run():
-    # song_count is the true setlist length. If fewer songs were added than the
-    # setlist holds (a matched song was excluded in the web UI), it is NOT a
-    # full run even though nothing is "missing".
-    summary = m._playlist_summary(
-        {"url": "u", "missing_tracks": [], "song_count": 6}, added_count=5)
-    assert summary.startswith("5 of 6 songs added.")
-    assert "full run" not in summary
-    assert "Missing" not in summary          # excluded != missing
-
-
-def test_playlist_summary_song_count_full_run():
-    # All of the setlist's songs added -> full run, using song_count as total.
-    summary = m._playlist_summary(
-        {"url": "u", "missing_tracks": [], "song_count": 6}, added_count=6)
-    assert summary.startswith("6 of 6 songs added.")
+    songs = [_song(1, "A", "", 51), _song(2, "B", "", 52),
+             _song(3, "C", "", 53), _song(4, "D", "", 54),
+             _song(5, "B reprise", "", 52), _song(6, "D reprise", "", 54)]
+    summary = m._playlist_summary({**_SHOW, "songs": songs},
+                                  member_keys={"51", "52", "53", "54"})
+    assert ("6 songs · 6 added (4 unique tracks; some songs share a recording)."
+            in summary.splitlines())
     assert "This is the full run of the show." in summary
 
 
-def test_playlist_summary_no_track_note_when_one_to_one():
-    # track_count == added_count -> no parenthetical (the common case).
+def test_playlist_summary_declined_song_is_not_a_full_run():
+    # A matched song the user did not add is declined, not missing, and its
+    # presence means this is not the full run of the show.
     summary = m._playlist_summary(
-        {"url": "u", "missing_tracks": []}, added_count=5, track_count=5)
-    assert summary.startswith("5 of 5 songs added.")
+        {**_SHOW, "songs": [_song(1, "A", "", 51), _song(2, "B", "", 52)]},
+        member_keys={"51"})
+    assert "2 songs · 1 added · 1 declined." in summary
+    assert "full run" not in summary
+    assert "Missing" not in summary          # declined != missing
+    assert "  • #2 B" in summary
+
+
+def test_playlist_summary_missing_only_omits_declined_section():
+    summary = m._playlist_summary(
+        {**_SHOW, "songs": [_song(1, "A", "", 51), _song(2, "B", "Nuggs")]},
+        member_keys={"51"})
+    assert "2 songs · 1 added · 1 missing." in summary
+    assert "Declined" not in summary
+    assert "  • #2 B — Nuggs" in summary
+
+
+def test_playlist_summary_membership_drives_state_not_stored_intent():
+    # The same map yields a different summary as playlist membership changes —
+    # this is what makes an edit made directly in Plex self-heal.
+    songs = [_song(1, "A", "", 51), _song(2, "B", "", 52)]
+    both = m._playlist_summary({**_SHOW, "songs": songs}, {"51", "52"})
+    one = m._playlist_summary({**_SHOW, "songs": songs}, {"51"})
+    assert "2 songs · 2 added." in both
+    assert "2 songs · 1 added · 1 declined." in one
+
+
+def test_playlist_summary_without_songs_map_is_empty():
+    # A history entry predating the per-song map cannot be derived from; the
+    # caller must skip the write rather than blank an existing summary.
+    assert m._playlist_summary({**_SHOW, "missing": 2}, member_keys=set()) == ""
+    assert m._playlist_summary({**_SHOW, "songs": []}, member_keys=set()) == ""
+
+
+def test_playlist_summary_header_omitted_when_show_unknown():
+    summary = m._playlist_summary({"songs": [_song(1, "A", "", 51)]},
+                                  member_keys={"51"})
+    assert summary.splitlines()[0] == "1 song · 1 added."
+
+
+def test_playlist_summary_header_without_city():
+    summary = m._playlist_summary(
+        {"artist": "Primus", "venue": "The Fillmore", "date": "2023-12-31",
+         "songs": [_song(1, "A", "", 51)]}, member_keys={"51"})
+    assert summary.splitlines()[:2] == ["Primus · The Fillmore", "2023-12-31"]
+
+
+def test_playlist_summary_no_track_note_when_one_to_one():
+    # One track per song -> no parenthetical (the common case).
+    summary = m._playlist_summary(
+        {"url": "u", "songs": [_song(i, f"S{i}", "", 50 + i)
+                               for i in range(1, 6)]},
+        member_keys={str(50 + i) for i in range(1, 6)})
+    assert "5 songs · 5 added." in summary
     assert "unique track" not in summary
 
 
 def test_playlist_summary_singular_grammar():
     # One song, and it's missing -> singular "song", no full-run line.
     summary = m._playlist_summary(
-        {"url": "u", "missing_tracks": [{"position": 1, "title": "Lonely"}]}, 0)
-    assert summary.startswith("0 of 1 song added.")
+        {"url": "u", "songs": [_song(1, "Lonely")]}, member_keys=set())
+    assert "1 song · 0 added · 1 missing." in summary
     assert "  • #1 Lonely" in summary
+    assert "full run" not in summary
 
 
 def test_playlist_summary_header_matches_rendered_bullets():
-    # A title-less missing entry is skipped; the "Missing (N)" header must count
-    # only the bullets actually rendered, not the raw missing length.
+    # A title-less map entry is skipped entirely; the counts line and each
+    # section header must agree with the bullets actually rendered.
     summary = m._playlist_summary(
-        {"missing_tracks": [{"artist": "A", "title": "Real Song"},
-                            {"artist": "A", "title": ""}]},
-        added_count=3)
-    assert "Missing (1):" in summary
+        {"songs": [_song(1, "Real Song"), _song(2, "")]}, member_keys=set())
+    assert "1 song · 0 added · 1 missing." in summary
+    assert "Missing (1) — not in your library:" in summary
     assert summary.count("  • ") == 1
 
 
 def test_playlist_summary_empty_meta_is_blank():
-    assert m._playlist_summary(None, 5) == ""
-    assert m._playlist_summary({}, 5) == ""
+    assert m._playlist_summary(None, member_keys=set()) == ""
+    assert m._playlist_summary({}, member_keys=set()) == ""
 
 
 def test_create_playlist_no_history_when_meta_none(monkeypatch, tmp_path):
@@ -1571,3 +1674,144 @@ def test_add_to_playlist_missing_playlist_raises(monkeypatch):
     monkeypatch.setattr(m, "connect_plex", lambda u, t: plex)
     with pytest.raises(m.PlexError):
         m.add_to_playlist(_CONFIG, 999, "Gone", ["10"])
+
+
+# --- summary refresh on the update and editor paths -------------------------
+
+_SHOW_META = {"id": "abc", "url": "u", "artist": "Phish", "venue": "MSG",
+              "city": "New York", "date": "2023-12-31"}
+
+
+def test_add_to_playlist_refreshes_stale_summary(monkeypatch, tmp_path):
+    # The reported bug: a track that was missing is bought and added via Update,
+    # and Plex must stop advertising it as missing.
+    pl = _FakePlaylistObj("My Show", 999,
+                          items=[_FakeTrack("A", "Phish", rating_key=10)])
+    pl.summary = ("3 songs · 1 added · 2 missing.\n\n"
+                  "Missing (2) — not in your library:\n"
+                  "  • #2 Tweezer\n  • #3 Destiny Unbound")
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
+    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "h.json")
+
+    # Re-matching found Tweezer (now owned); Destiny Unbound is still missing.
+    m.add_to_playlist(
+        _CONFIG, 999, "My Show", ["11"],
+        history_meta={**_SHOW_META, "missing": 1,
+                      "missing_tracks": [{"position": 3, "artist": "Phish",
+                                          "title": "Destiny Unbound"}],
+                      "songs": [_song(1, "Chalk Dust Torture", "", 10),
+                                _song(2, "Tweezer", "", 11),
+                                _song(3, "Destiny Unbound", "Lawn Boy")]})
+
+    assert "3 songs · 2 added · 1 missing." in pl.summary
+    assert "Tweezer" not in pl.summary            # no longer advertised missing
+    assert "  • #3 Destiny Unbound — Lawn Boy" in pl.summary
+    assert "Declined" not in pl.summary
+    # The map is persisted so the editor can derive from it later.
+    saved = m.load_history(tmp_path / "h.json")
+    assert [s["title"] for s in saved["abc"]["songs"]] == [
+        "Chalk Dust Torture", "Tweezer", "Destiny Unbound"]
+
+
+def test_add_to_playlist_summary_failure_is_best_effort(monkeypatch, tmp_path):
+    pl = _FakePlaylistObj("My Show", 999, items=[])
+    pl.summary_fail = True
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
+    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "h.json")
+
+    title, added = m.add_to_playlist(
+        _CONFIG, 999, "My Show", ["11"],
+        history_meta={**_SHOW_META, "songs": [_song(1, "Tweezer", "", 11)]})
+
+    assert (title, added) == ("My Show", 1)        # the update itself succeeded
+    assert [t.ratingKey for t in pl.added] == [11]
+    assert m.load_history(tmp_path / "h.json")["abc"]["matched"] == 1
+
+
+def test_set_playlist_removal_moves_song_to_declined(monkeypatch, tmp_path):
+    # Removing a track in the editor must move that song added -> declined,
+    # using only the stored map: no setlist.fm call, no matcher call.
+    items = [_FakeTrack("A", "Phish", rating_key=10),
+             _FakeTrack("B", "Phish", rating_key=11)]
+    pl = _FakePlaylistObj("My Show", 999, items=items)
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
+    hist = tmp_path / "h.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.save_history(hist, {"abc": {**_SHOW_META, "playlist_rating_key": 999,
+                                  "songs": [_song(1, "Chalk Dust", "", 10),
+                                            _song(2, "Tweezer", "Junta", 11)]}})
+    for name in ("fetch_setlist", "gather_matches", "match_candidates"):
+        monkeypatch.setattr(m, name, _boom(name))
+
+    m.set_playlist(_CONFIG, "999", "My Show", ["10"])   # drop Tweezer
+
+    assert "2 songs · 1 added · 1 declined." in pl.summary
+    assert "Declined (1) — in your library, not added:" in pl.summary
+    assert "  • #2 Tweezer — Junta" in pl.summary
+    assert "Missing" not in pl.summary
+
+
+def test_set_playlist_without_history_leaves_summary_alone(monkeypatch, tmp_path):
+    # The editor works on any Plex playlist, including ones this app never made.
+    pl = _FakePlaylistObj("Someone Else's Mix", 999,
+                          items=[_FakeTrack("A", "x", rating_key=10)])
+    pl.summary = "hand-written, not ours"
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
+    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "h.json")
+
+    m.set_playlist(_CONFIG, "999", "Renamed", ["10"])
+
+    assert pl.summary == "hand-written, not ours"
+
+
+def test_set_playlist_legacy_entry_keeps_its_summary(monkeypatch, tmp_path):
+    # A history entry predating the per-song map cannot be derived from; the
+    # existing summary must survive rather than being blanked.
+    pl = _FakePlaylistObj("My Show", 999,
+                          items=[_FakeTrack("A", "Phish", rating_key=10)])
+    pl.summary = "2 of 3 songs added."
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
+    hist = tmp_path / "h.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.save_history(hist, {"abc": {**_SHOW_META, "playlist_rating_key": 999,
+                                  "missing": 1}})       # no "songs" map
+
+    m.set_playlist(_CONFIG, "999", "My Show", ["10"])
+
+    assert pl.summary == "2 of 3 songs added."
+
+
+def test_update_keeps_hand_picked_version_over_rematch(monkeypatch, tmp_path):
+    # The user picked a non-default version of song 1 at create time. Update
+    # re-matches the whole setlist and proposes its own default for it. The
+    # stored key is what's actually in the playlist, so it must win — both in
+    # history AND in the summary, or the song wrongly reads as declined.
+    pl = _FakePlaylistObj("My Show", 999,
+                          items=[_FakeTrack("Tweezer", "Phish", rating_key=77)])
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: _FakeCreatePlex([pl]))
+    hist = tmp_path / "h.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.save_history(hist, {"abc": {**_SHOW_META, "playlist_rating_key": 999,
+                                  "songs": [
+                                      _song(1, "Tweezer", "", "77"),
+                                      _song(2, "Destiny Unbound", "")]}})
+
+    m.add_to_playlist(_CONFIG, 999, "My Show", ["12"], history_meta={
+        **_SHOW_META, "songs": [
+            _song(1, "Tweezer", "", "11"),          # re-match's default pick
+            _song(2, "Destiny Unbound", "", "12")]})  # bought since
+
+    assert [s["rating_key"] for s in m.load_history(hist)["abc"]["songs"]] == \
+        ["77", "12"]
+    assert "2 songs · 2 added." in pl.summary
+    assert "Declined" not in pl.summary
+
+
+def test_record_history_keeps_songs_map_when_meta_omits_it(monkeypatch, tmp_path):
+    hist = tmp_path / "h.json"
+    monkeypatch.setattr(m, "history_path", lambda: hist)
+    m.save_history(hist, {"abc": {"id": "abc", "songs": [_song(1, "A", "", 10)]}})
+
+    m._record_history("Name", 999, 1, {"id": "abc", "artist": "Phish"})
+
+    assert m.load_history(hist)["abc"]["songs"] == [_song(1, "A", "", 10)]

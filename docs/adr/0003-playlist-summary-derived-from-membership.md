@@ -1,0 +1,18 @@
+# Playlist summary state is derived from membership, not remembered
+
+The Plex **playlist summary** (see `CONTEXT.md`) reports each setlist song as **added**, **declined**, or **missing**. We decided those states are **derived at every write** — recomputed from the playlist's live membership against a stored per-song map — and never recorded as a remembered fact. Every write path (setlist create, Update, the editor) rebuilds the whole summary from scratch; nothing is merged into what's already there.
+
+The alternative was to remember the user's intent at the moment they expressed it: carry a `declined_json` hidden field alongside the existing `missing_json`, built from the rows they unchecked. It is a much smaller change and costs no extra Plex work. We rejected it because a remembered decision only knows what happened in the one form submission that recorded it. Remove a track in the editor, or in Plex itself, and the stored list is silently wrong with nothing to correct it — which is the same class of bug this whole change exists to fix, just moved somewhere harder to see. Deriving from membership is self-healing: whatever the playlist actually holds is the answer, regardless of which path last touched it.
+
+Deriving still needs to know which track each setlist song matched, and re-running the matcher at every write was not acceptable — it would put a setlist.fm round-trip and a full artist-track pull behind an editor rename. So the match result is stored instead: a per-song **map** on the history entry, one row per setlist position with its title, the album setlist.fm says it's from, and the matched Plex `rating_key` (or null). State is then a set membership test, not a search.
+
+## Consequences
+
+- `_playlist_summary(history_meta, member_keys)` is pure and takes the playlist's current membership; `_write_summary(playlist, history_meta)` reads that membership and is the single entry point all three write paths call. `_song_states` is the one place the three-way split is decided.
+- The history entry grows a `songs` map, built by `song_map(result)` from a `gather_matches` result so the CLI and the web produce the same shape. Its `rating_key`s are **strings**, unlike the integer `rating_key` used elsewhere, because the web round-trips the map through a form field where the type would otherwise change.
+- Only paths that re-match supply a fresh map. `add_to_playlist` reconciles it with `_merge_song_maps` **before** anything reads it: a stored key wins over a re-match's default, because the stored key is the version actually in the playlist and may be one the user selected. A fresh create keeps its own selections, so `_record_history` does not merge.
+- Entries predating the map get **no** summary rather than a degraded one — a good summary is never blanked by a path lacking the data to rebuild it. The next Update backfills the map.
+- The editor writes a correct summary with no matcher call at all, and no-ops cleanly on a playlist this app never created (no history entry). It does **not** discover newly-purchased tracks; that remains the Update path's job.
+- Known gap: swapping a track for a different version *in the editor* leaves the map pointing at the old key, so that song reads as declined and the new track goes unaccounted. The editor has no setlist context to re-match with. Running Update repairs it.
+- Summary writes are best-effort, matching the poster stance in `0002-playlist-poster-best-effort.md`: a failure warns and never undoes the create, update, or edit that triggered it.
+- `song_count` was removed. The map makes the setlist length `len(songs)`, and nothing else read the field.

@@ -751,6 +751,18 @@ def _update_history_playlist(playlist_id, name, count):
             logger.warning("Could not write history (%s).", exc)
 
 
+def history_entry_for_playlist(playlist_id):
+    """The history entry for an existing Plex playlist, or None.
+
+    None for a playlist this app never created (the editor works on any Plex
+    playlist), which is the signal to leave its summary alone.
+    """
+    for entry in load_history(history_path()).values():
+        if str(entry.get("playlist_rating_key")) == str(playlist_id):
+            return entry
+    return None
+
+
 def should_process(history, setlist_id, force, is_tty, prompt_fn=input):
     """Decide whether to process a setlist given prior history.
 
@@ -1058,11 +1070,16 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None,
     fuzzy = []
     songs = []   # the full setlist in order, each row flagged matched or not
     for position, title, candidates in per_song:
+        # The album setlist.fm says this song is from. Distinct from a matched
+        # row's "album" (the Plex album of the chosen track): this one is a
+        # property of the *song*, known even when nothing in the library
+        # matched, so it labels every state in the playlist summary.
+        release = album_map.get(normalize_aggressive(title), "")
         if not candidates:
-            missing.append((position, show["artist"], title,
-                            album_map.get(normalize_aggressive(title), "")))
+            missing.append((position, show["artist"], title, release))
             songs.append({"position": position, "title": title,
-                          "matched": False, "artist": show["artist"]})
+                          "matched": False, "artist": show["artist"],
+                          "release": release})
             logger.info("  ✗ %2d. %s → no match", position, title)
             continue
         best = candidates[0]
@@ -1081,7 +1098,7 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None,
                  "candidates": [_describe(c) for c in candidates]}
         entry.update(_describe(best))  # default fields mirror the best candidate
         matched.append(entry)
-        songs.append({**entry, "matched": True})
+        songs.append({**entry, "matched": True, "release": release})
 
     return {
         "setlist_id": setlist_id,
@@ -1095,6 +1112,39 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None,
         "album_options": album_options,
         "service": service.name,
     }
+
+
+def song_map(result):
+    """The per-song map a playlist summary is derived from.
+
+    One row per setlist position — its title, the album setlist.fm says the song
+    is from, and the track it matched (None when nothing did). Built from a
+    gather_matches result so the CLI and the web produce the same shape; the web
+    round-trips it through a form, where a user's selection can replace a row's
+    key. Keys are strings so that round trip can't change their type.
+    """
+    return [{"position": song["position"],
+             "title": song["title"],
+             "album": song.get("release", ""),
+             "rating_key": (str(song["rating_key"])
+                            if song.get("matched")
+                            and song.get("rating_key") is not None else None)}
+            for song in result["songs"]]
+
+
+def _merge_song_maps(stored, incoming):
+    """Merge a freshly-matched per-song map over the stored one.
+
+    A stored key is the track that actually went into the playlist — a version
+    the user may have selected themselves — so it wins over a re-match's default
+    for the same song. A fresh match only fills a gap: the song that had nothing
+    in the library and now does, which is the whole point of an update.
+    """
+    if not stored:
+        return incoming
+    keys = {s.get("position"): s.get("rating_key") for s in stored}
+    return [{**song, "rating_key": keys.get(song.get("position"))
+             or song.get("rating_key")} for song in incoming]
 
 
 def _record_history(playlist_name, playlist_rating_key, matched_count,
@@ -1120,9 +1170,17 @@ def _record_history(playlist_name, playlist_rating_key, matched_count,
         "service": service,
         "source": history_meta.get("source", "setlist"),
         "processed_at": datetime.now().isoformat(timespec="seconds"),
+        "venue": history_meta.get("venue", entry.get("venue", "")),
+        "city": history_meta.get("city", entry.get("city", "")),
         "matched": matched_count,
         "missing": history_meta.get("missing", 0),
         "missing_tracks": history_meta.get("missing_tracks", []),
+        # The per-song map the Plex summary is derived from: one row per
+        # setlist position with the track it matched (or None). Only paths that
+        # re-match supply it, so an absent map must not wipe a stored one.
+        # Reconciling a fresh map against the stored one is the update path's
+        # job (see add_to_playlist) — a fresh create must keep its own picks.
+        "songs": history_meta.get("songs") or entry.get("songs", []),
     })
     history[setlist_id] = entry
     try:
@@ -1131,52 +1189,138 @@ def _record_history(playlist_name, playlist_rating_key, matched_count,
         logger.warning("Could not write history at %s (%s).", hist_file, exc)
 
 
-def _playlist_summary(history_meta, added_count, track_count=None):
+def _write_summary(playlist, history_meta):
+    """Rebuild the playlist's Plex summary from its live membership.
+
+    Best-effort throughout, matching the poster policy: a failure here logs and
+    returns, never undoing or blocking the create/update/edit that triggered it.
+    Writes nothing when the summary would be empty, so a playlist with a good
+    summary is never blanked by a path that lacks the data to rebuild it.
+    """
+    try:
+        # addItems/removeItems don't refresh plexapi's cached items().
+        playlist.reload()
+        member_keys = {str(getattr(item, "ratingKey", ""))
+                       for item in playlist.items()}
+    except Exception as exc:
+        logger.warning("Could not read playlist membership for the summary "
+                       "(%s).", exc)
+        return
+    summary = _playlist_summary(history_meta, member_keys)
+    if not summary:
+        return
+    try:
+        playlist.editSummary(summary)
+    except Exception as exc:
+        logger.warning("Could not set playlist summary (%s).", exc)
+
+
+def _song_states(songs, member_keys):
+    """Split a per-song map into (added, declined, missing) by playlist state.
+
+    Every setlist song is in exactly one state, decided by the map's matched
+    ``rating_key`` against ``member_keys`` (the playlist's live membership):
+    matched and present -> added, matched but absent -> declined, never matched
+    -> missing. Derived at each write, never remembered, so a track removed in
+    the editor — or directly in Plex — reads correctly next time.
+    """
+    members = {str(k) for k in member_keys or ()}
+    added, declined, missing = [], [], []
+    for song in songs:
+        key = song.get("rating_key")
+        if key is None or str(key) == "":
+            missing.append(song)
+        elif str(key) in members:
+            added.append(song)
+        else:
+            declined.append(song)
+    return added, declined, missing
+
+
+def _summary_bullets(heading, songs):
+    """A blank separator line, the section heading, then one bullet per song."""
+    lines = ["", heading]
+    for song in songs:
+        title = (song.get("title") or "").strip()
+        album = (song.get("album") or "").strip()
+        pos = song.get("position")
+        head = f"#{pos} {title}" if pos else title   # setlist position
+        lines.append(f"  • {head} — {album}" if album else f"  • {head}")
+    return lines
+
+
+def _playlist_summary(history_meta, member_keys):
     """Build the Plex playlist summary text from show metadata.
 
-    A self-contained record: how many of the setlist's songs made it in, the
-    missing tracks with their likely albums (a built-in buy-list for the show),
-    and the setlist.fm source link. Returns "" when there's nothing useful to
-    say (no history_meta), so the caller can skip the summary entirely.
+    A self-contained record: which show this is, how much of it the playlist
+    holds, the songs still worth buying (a built-in buy-list), and the
+    setlist.fm source link. Derived — never merged into what's already there —
+    so every write path can rebuild it from scratch.
 
-    ``added_count`` counts *songs* added (one per setlist song, not
-    deduplicated). ``track_count``, when given, is the number of distinct Plex
-    tracks those songs resolved to; if fewer than ``added_count`` (e.g. two
-    songs that share one recording), the difference is noted so the playlist's
-    item count still makes sense.
+    ``member_keys`` is the playlist's current membership (Plex rating keys);
+    together with the entry's per-song map it decides each song's state. See
+    ``_song_states``.
+
+    Returns "" when there's nothing trustworthy to say — no metadata, a
+    manually-built playlist, or a history entry predating the per-song map —
+    so the caller skips the write rather than blanking a good summary.
     """
     meta = history_meta or {}
     # Manually-built playlists have no setlist behind them; the setlist-shaped
     # summary (counts, "full run", source link) would be misleading, so skip it.
     if not meta or meta.get("source") == "manual":
         return ""
-    missing = meta.get("missing_tracks", []) or []
-    # Prefer the true setlist length (set by callers that know it); fall back to
-    # added + missing. This keeps "of N" honest when songs were excluded in the
-    # web UI (added < total, yet nothing is "missing").
-    total = meta.get("song_count") or (added_count + len(missing))
-    note = ""
-    if track_count is not None and track_count < added_count:
-        note = (f" ({track_count} unique track{'' if track_count == 1 else 's'}; "
-                "some songs share a recording)")
-    lines = [f"{added_count} of {total} song{'' if total == 1 else 's'} added{note}."]
+    # Only songs with a title render as bullets, and the map is what the whole
+    # summary is derived from — without it there is nothing honest to write.
+    songs = [s for s in (meta.get("songs") or [])
+             if (s.get("title") or "").strip()]
+    if not songs:
+        return ""
 
-    # Only tracks with a title render as bullets; count the header off those so
-    # "Missing (N):" always matches the number of lines that follow.
-    renderable = [t for t in missing if (t.get("title") or "").strip()]
-    # Full run only when every setlist song made it in: nothing missing AND
-    # nothing excluded (added covers the whole setlist).
-    if total and not missing and added_count >= total:
+    added, declined, missing = _song_states(songs, member_keys)
+    lines = []
+
+    # Show header: enough to identify the gig if the playlist is ever renamed.
+    artist = (meta.get("artist") or "").strip()
+    place = ", ".join(p for p in ((meta.get("venue") or "").strip(),
+                                  (meta.get("city") or "").strip()) if p)
+    head = " · ".join(p for p in (artist, place) if p)
+    if head:
+        lines.append(head)
+    if (meta.get("date") or "").strip():
+        lines.append(meta["date"].strip())
+    if lines:
+        lines.append("")
+
+    # Counts line. Two songs can share one recording (a medley, or a reprise
+    # matching its parent), so note the smaller unique-track count when they
+    # diverge — otherwise "N added" contradicts Plex's own item count.
+    unique = len({str(s["rating_key"]) for s in added})
+    note = ""
+    if unique < len(added):
+        note = (f" ({unique} unique track{'' if unique == 1 else 's'}; "
+                "some songs share a recording)")
+    counts = [f"{len(songs)} song{'' if len(songs) == 1 else 's'}",
+              f"{len(added)} added{note}"]
+    if declined:
+        counts.append(f"{len(declined)} declined")
+    if missing:
+        counts.append(f"{len(missing)} missing")
+    lines.append(" · ".join(counts) + ".")
+
+    # Full run only when every setlist song is in the playlist — nothing
+    # missing from the library and nothing declined.
+    if not declined and not missing:
         lines += ["", "This is the full run of the show."]
-    elif renderable:
-        lines += ["", f"Missing ({len(renderable)}):"]
-        for track in renderable:
-            title = track["title"].strip()
-            album = (track.get("album") or "").strip()
-            pos = track.get("position")
-            head = f"#{pos} {title}" if pos else title   # setlist position
-            lines.append(f"  • {head} — {album}" if album
-                         else f"  • {head}")
+    else:
+        # Missing leads: it's the actionable list (these are the songs to buy).
+        if missing:
+            lines += _summary_bullets(
+                f"Missing ({len(missing)}) — not in your library:", missing)
+        if declined:
+            lines += _summary_bullets(
+                f"Declined ({len(declined)}) — in your library, not added:",
+                declined)
 
     url = meta.get("url")
     if url:
@@ -1277,18 +1421,9 @@ def create_playlist(config, name, rating_keys, history_meta=None,
     except plex_exceptions.PlexApiException as exc:
         raise PlexError(f"Failed to create playlist: {exc}") from exc
 
-    # Record a self-contained summary (counts, missing-with-albums, source link)
-    # on the Plex playlist. Fail-soft so a summary hiccup never undoes a created
-    # playlist.
-    # Count songs (one per setlist pick), not the deduped track list — a medley
-    # or two songs matching the same recording must not shrink the "of N" total
-    # or wrongly trip the full-run note.
-    summary = _playlist_summary(history_meta, len(rating_keys), len(tracks))
-    if summary:
-        try:
-            playlist.editSummary(summary)
-        except Exception as exc:
-            logger.warning("Could not set playlist summary (%s).", exc)
+    # Record a self-contained summary (show, counts, missing-with-albums, source
+    # link) on the Plex playlist, derived from what actually landed in it.
+    _write_summary(playlist, history_meta)
 
     # Best-effort poster — None when no image was supplied, else the upload's
     # success. Runs after the playlist exists, so it can never undo creation.
@@ -1361,6 +1496,20 @@ def add_to_playlist(config, rating_key, name, rating_keys, history_meta=None):
             playlist.addItems(tracks)
         except plex_exceptions.PlexApiException as exc:
             raise PlexError(f"Failed to add tracks: {exc}") from exc
+
+    # Reconcile the re-match against what the playlist already holds *before*
+    # anything reads the map: this update re-matched the whole setlist, so its
+    # defaults would otherwise displace selections the user made earlier and
+    # those songs would read as declined.
+    if history_meta and history_meta.get("songs"):
+        stored = history_entry_for_playlist(getattr(playlist, "ratingKey", None))
+        history_meta = {**history_meta,
+                        "songs": _merge_song_maps((stored or {}).get("songs"),
+                                                  history_meta["songs"])}
+
+    # The whole point of the update: a song that was missing is now owned, so
+    # the summary Plex is showing has gone stale. Rebuild it.
+    _write_summary(playlist, history_meta)
 
     _record_history(playlist.title, getattr(playlist, "ratingKey", None),
                     len(existing) + len(tracks), history_meta)
@@ -1559,6 +1708,12 @@ def set_playlist(config, rating_key, name, rating_keys, poster_path=None):
     poster = set_playlist_poster(playlist, poster_path) if poster_path else None
     _update_history_playlist(getattr(playlist, "ratingKey", None),
                              final_title, count)
+    # Membership just changed, so added/declined have too. Rebuild from the
+    # stored per-song map — no matcher call, and a no-op for a playlist this
+    # app never created (no history entry) or one predating the map.
+    _write_summary(playlist,
+                   history_entry_for_playlist(getattr(playlist, "ratingKey",
+                                                      None)))
     return SetResult(final_title, count, poster)
 
 
@@ -1692,8 +1847,10 @@ def main(argv=None):
         "id": setlist_id,
         "url": result["show"]["url"],
         "artist": result["show"]["artist"],
+        "venue": result["show"]["venue"],
+        "city": result["show"]["city"],
         "date": result["show"]["date"],
-        "song_count": len(result["songs"]),
+        "songs": song_map(result),
         "missing": len(result["missing"]),
         "missing_tracks": [
             {"position": r[0], "artist": r[1], "title": r[2],
