@@ -128,6 +128,8 @@
                         data-key="{{ c.rating_key }}"
                         data-title="{{ c.track_artist }} — {{ c.track_title }}"
                         data-sub="{{ c.album }}{% if c.album %} · {% endif %}{{ c.tier }}/{{ c.source }}">
+                  <span class="aud" data-aud-key="{{ c.rating_key }}"
+                        title="Audition this version">▶</span>
                   <span class="dd-title trunc">{{ c.track_artist }} — {{ c.track_title }}</span>
                   <span class="dd-sub trunc">{{ c.album }}{% if c.album %} · {% endif %}{{ c.tier }}/{{ c.source }}</span>
                 </button>
@@ -152,6 +154,8 @@
         <td>
           <div class="matchcell">
           {% if s.matched %}
+          <button type="button" class="aud-btn" data-aud-row="{{ s.position }}"
+                  title="Audition the selected track" aria-label="Audition">▶</button>
           <button type="button" class="rowsearch-btn" data-rowsearch="{{ s.position }}"
                   title="Search library" aria-label="Search library">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"

@@ -392,9 +392,45 @@
     .missingcard.skipped { opacity: .4; }
     .searchpill { display: flex; align-items: center; gap: 8px; min-width: 0;
       background: #101014; border: 1px solid #2A2A32; border-radius: 8px; padding: 6px 12px; }
+    /* --- auditioning (ADR-0004) --- */
+    .aud-btn {
+      background: none; border: 1px solid var(--border2); color: var(--muted);
+      border-radius: 5px; cursor: pointer; font: 500 10px/1 var(--mono);
+      padding: 5px 6px; flex: none;
+    }
+    .aud-btn:hover { color: var(--accent); border-color: var(--accent); }
+    .aud-btn.playing { color: var(--accent); border-color: var(--accent); }
+    /* Inside a dropdown option or a search result: a span, not a button —
+       these live inside a <button>, where a nested button is invalid. */
+    .aud { color: var(--dim); cursor: pointer; flex: none;
+           padding: 0 6px; font-size: 11px; }
+    .aud:hover { color: var(--accent); }
+    .auditionbox { margin: 4px 0 6px; }
+    .auditionrow > td { background: var(--panel3); padding: 8px 12px; }
+    .audition {
+      display: flex; align-items: center; gap: 10px;
+      font: 400 11px/1.4 var(--mono); color: var(--text2);
+      background: var(--panel3); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px;
+    }
+    .audition .play {
+      background: var(--accent); color: #17130A; border: 0; border-radius: 4px;
+      cursor: pointer; font: 600 11px/1 var(--mono); padding: 7px 10px;
+      flex: none; min-width: 34px;
+    }
+    .audition .seek { flex: 1; accent-color: var(--accent); min-width: 80px; }
+    .audition .seek:disabled { opacity: .45; cursor: not-allowed; }
+    .audition .time { color: var(--muted); flex: none;
+                      font-variant-numeric: tabular-nums; }
+    .audition .what { color: var(--text2); flex: none; max-width: 34%;
+                      overflow: hidden; text-overflow: ellipsis;
+                      white-space: nowrap; }
+    .audition .note { color: var(--dim); flex: none; }
+    .audition .note.warn { color: var(--accent); }
+    .audition .esc { color: var(--faint); flex: none; }
   </style>
 </head>
-<body>
+<body data-plex-base="{{ plex_baseurl }}">
   <main>
     <nav class="navbar">
       <a class="brand" href="{{ url_for('index') }}">Setlist <span class="arrow">→</span> Plex</a>

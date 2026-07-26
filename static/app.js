@@ -75,6 +75,17 @@
       b.type = "button";
       const st = stars(t.rating);
       if (st) b.appendChild(el("span", "result-stars", st));
+      // Audition a hit before committing to it. A span, not a button — this
+      // sits inside the result button — and it stops the click there so
+      // listening never counts as picking.
+      const aud = el("span", "aud", "▶");
+      aud.title = "Audition this track";
+      aud.addEventListener("click", function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        mountAudition(b, t.rating_key, false, null);
+      });
+      b.appendChild(aud);
       b.addEventListener("click", function () { onPick(t, label); });
       results.appendChild(b);
     });
@@ -150,6 +161,7 @@
   function applyPick(pos, track, label) {
     const row = document.querySelector('tr[data-rownum="' + pos + '"]');
     if (!row) return;
+    stopAudition();          // the row no longer points at what's playing
     markTouched(pos);
     const pick = row.querySelector('[name="pick_' + pos + '"]');
     if (pick) { pick.value = track.rating_key; pick.disabled = false; }
@@ -265,8 +277,8 @@
   function wireFuzzyCard(card) {
     const a = card.querySelector("[data-accept]");
     const r = card.querySelector("[data-reject]");
-    if (a) a.addEventListener("click", function () { onAccept(a); });
-    if (r) r.addEventListener("click", function () { onReject(r); });
+    if (a) a.addEventListener("click", function () { stopAudition(); onAccept(a); });
+    if (r) r.addEventListener("click", function () { stopAudition(); onReject(r); });
   }
   // The candidate sub-line shared by the dropdown and the fuzzy card (mirrors
   // the Jinja form in preview.html): "Album · tier/source".
@@ -438,6 +450,184 @@
     }
   }
 
+  // --- auditioning (ADR-0004) ----------------------------------------------
+  // Listening to a candidate before selecting it. Deliberately never calls
+  // markTouched(): auditioning is not a touch, so a row auditioned but not
+  // chosen still re-matches on the next preferred-album switch. Do not "fix"
+  // that by marking the row — it would silently freeze rows the user only
+  // listened to.
+  //
+  // There is exactly one player at a time; it is created next to whatever is
+  // being auditioned and destroyed when anything invalidates it. Stopping
+  // clears the element's src and calls load(), which is what actually closes
+  // the connection — pausing alone leaves the socket open, and on the proxy
+  // path that holds one of the server's four threads.
+
+  const PLEX_BASE = document.body.dataset.plexBase || "";
+  let auditionEl = null;      // the roaming host node (tr or div)
+  let auditionAudio = null;
+
+  // Reachability is a property of the browser's network, not the server's, so
+  // only the browser can answer it — cached per tab because the answer can't
+  // change without a reload. ?audition=direct|proxy forces either path, which
+  // is the only way to exercise the one the probe didn't pick.
+  async function canReachPlex() {
+    // The override sticks for the tab: the pages worth testing are reached by
+    // POST (/preview, /create), where a query string can't follow. ?audition=
+    // auto clears it again.
+    let forced = new URLSearchParams(location.search).get("audition");
+    if (forced) sessionStorage.setItem("auditionForce", forced);
+    else forced = sessionStorage.getItem("auditionForce");
+    if (forced === "auto") sessionStorage.removeItem("auditionForce");
+    if (forced === "direct") return true;
+    if (forced === "proxy") return false;
+    const cached = sessionStorage.getItem("auditionDirect");
+    if (cached !== null) return cached === "1";
+    let ok = false;
+    if (PLEX_BASE) {
+      try {
+        // no-cors: we only need "did the connection succeed", not the body.
+        await fetch(PLEX_BASE + "/identity",
+                    { mode: "no-cors", signal: AbortSignal.timeout(2000) });
+        ok = true;
+      } catch (err) { ok = false; }
+    }
+    sessionStorage.setItem("auditionDirect", ok ? "1" : "0");
+    return ok;
+  }
+
+  function clockText(secs) {
+    if (!isFinite(secs) || secs < 0) return "–:––";
+    const m = Math.floor(secs / 60);
+    return m + ":" + String(Math.floor(secs % 60)).padStart(2, "0");
+  }
+
+  function stopAudition() {
+    if (auditionAudio) {
+      auditionAudio.pause();
+      auditionAudio.removeAttribute("src");
+      auditionAudio.load();                 // closes the connection
+      auditionAudio = null;
+    }
+    if (auditionEl) { auditionEl.remove(); auditionEl = null; }
+    document.querySelectorAll(".aud-btn.playing").forEach(function (b) {
+      b.classList.remove("playing");
+    });
+  }
+
+  // `after` is the node to open beneath; `asRow` wraps in a <tr> for the
+  // preview table, otherwise a plain div (search results).
+  async function mountAudition(after, ratingKey, asRow, trigger) {
+    stopAudition();
+
+    const box = el("div", "audition");
+    const play = el("button", "play", "▶"); play.type = "button";
+    play.disabled = true;
+    const seek = document.createElement("input");
+    seek.type = "range"; seek.className = "seek";
+    seek.min = 0; seek.max = 1; seek.step = 0.1; seek.value = 0;
+    seek.disabled = true;
+    const time = el("span", "time", "0:00 / –:––");
+    const what = el("span", "what", "loading…");
+    const note = el("span", "note", "");
+    box.append(play, seek, time, what, note, el("span", "esc", "ESC to stop"));
+
+    let host;
+    if (asRow) {
+      host = document.createElement("tr");
+      host.className = "auditionrow";
+      const td = document.createElement("td");
+      td.colSpan = 5;
+      td.appendChild(box);
+      host.appendChild(td);
+    } else {
+      host = el("div", "auditionbox");
+      host.appendChild(box);
+    }
+    after.parentNode.insertBefore(host, after.nextSibling);
+    auditionEl = host;
+    if (trigger) trigger.classList.add("playing");
+
+    let data;
+    try {
+      const resp = await fetch("/audition/" + encodeURIComponent(ratingKey));
+      data = await resp.json();
+      if (!resp.ok || data.error) throw new Error(data.error || "unavailable");
+    } catch (err) {
+      if (auditionEl !== host) return;      // superseded while loading
+      what.textContent = "can't audition this track";
+      note.textContent = String(err.message || err);
+      note.classList.add("warn");
+      return;
+    }
+    const direct = await canReachPlex();
+    if (auditionEl !== host) return;
+
+    const audio = new Audio();
+    audio.preload = "auto";
+    audio.src = direct ? data.direct_url : data.stream_path;
+    auditionAudio = audio;
+
+    what.textContent = (data.artist ? data.artist + " — " : "") + data.title;
+    // Surfaced deliberately: which path is in use and whether the scrubber can
+    // be trusted. A transcode is chunked with no byte ranges, so it cannot be
+    // seeked at all — saying so beats a seek bar that silently does nothing.
+    const transcoded = data.mode === "transcode";
+    note.textContent = (direct ? "direct" : "proxied") +
+      (transcoded ? " · transcoded, no seek" : "");
+    if (transcoded) note.classList.add("warn");
+
+    // Plex knows the real duration even when the stream won't declare one.
+    const known = data.duration ? data.duration / 1000 : NaN;
+
+    function total() {
+      return isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration : known;
+    }
+    function paint() {
+      const dur = total();
+      time.textContent = clockText(audio.currentTime) + " / " + clockText(dur);
+      if (isFinite(dur) && dur > 0) {
+        seek.max = dur;
+        seek.value = audio.currentTime;
+        seek.disabled = transcoded;         // no ranges upstream: seek is a lie
+      }
+    }
+
+    audio.addEventListener("loadedmetadata", paint);
+    audio.addEventListener("timeupdate", paint);
+    audio.addEventListener("ended", function () {
+      play.textContent = "▶";
+      if (trigger) trigger.classList.remove("playing");
+    });
+    audio.addEventListener("error", function () {
+      what.textContent = "playback failed";
+      note.textContent = direct
+        ? "couldn't reach Plex from the browser" : "stream error";
+      note.classList.add("warn");
+      play.disabled = true;
+    });
+    seek.addEventListener("input", function () {
+      if (!transcoded) audio.currentTime = Number(seek.value);
+    });
+    play.addEventListener("click", function () {
+      if (audio.paused) { audio.play(); play.textContent = "❚❚"; }
+      else { audio.pause(); play.textContent = "▶"; }
+    });
+
+    play.disabled = false;
+    play.textContent = "❚❚";
+    paint();
+    try { await audio.play(); } catch (err) { play.textContent = "▶"; }
+  }
+
+  // The row's current pick — the hidden input both single- and multi-candidate
+  // rows carry, so this always follows the selection rather than the match.
+  function rowPick(row) {
+    const inp = row.querySelector('input[type=hidden][name^="pick_"]');
+    return inp && inp.value;
+  }
+
   // --- wiring --------------------------------------------------------------
   document.querySelectorAll("form[data-loading]").forEach(function (form) {
     form.addEventListener("submit", function () {
@@ -476,7 +666,10 @@
   // No-JS users fall back to the Apply button (a full submit that resets).
   document.querySelectorAll("[data-album-select]").forEach(function (sel) {
     sel.dataset.prev = sel.value;   // last album that matched, for error revert
-    sel.addEventListener("change", function () { rematchAlbum(sel); });
+    sel.addEventListener("change", function () {
+      stopAudition();        // a re-match can rewrite the candidate playing
+      rematchAlbum(sel);
+    });
   });
 
   document.querySelectorAll("[data-poster-input]").forEach(function (input) {
@@ -535,6 +728,46 @@
   });
   document.querySelectorAll(".dd-opt").forEach(function (opt) {
     opt.addEventListener("click", function () { selectDdOpt(opt); });
+  });
+
+  // --- audition wiring -----------------------------------------------------
+  // Audition the row's currently selected track.
+  document.querySelectorAll("[data-aud-row]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      const row = btn.closest("tr[data-rownum]");
+      const key = row && rowPick(row);
+      if (!key) return;
+      if (btn.classList.contains("playing")) { stopAudition(); return; }
+      mountAudition(row, key, true, btn);
+    });
+  });
+
+  // Audition one candidate from inside an open dropdown. The listener sits on
+  // the span, so it runs before the option's own click handler and stops it
+  // there: auditioning a candidate must not select it, or merely listening
+  // would touch the row and freeze it against re-match.
+  document.querySelectorAll(".dd-opt .aud").forEach(function (spot) {
+    spot.addEventListener("click", function (e) {
+      e.stopPropagation();
+      e.preventDefault();
+      const row = spot.closest("tr[data-rownum]");
+      if (!row) return;
+      mountAudition(row, spot.dataset.audKey, true, null);
+    });
+  });
+
+  // Warm the reachability verdict now rather than on the first click: an
+  // unroutable Plex takes the full abort timeout to fail, and finding that out
+  // mid-click would stall the first audition. Also the point at which an
+  // ?audition= override is captured for the tab, so it survives the POSTs to
+  // /preview and /create. Fire-and-forget — nothing waits on it.
+  canReachPlex();
+
+  // Escape stops. Not space — the preview page is full of checkboxes and
+  // inputs where space already means something, so a global binding would
+  // fight the page. The control says "ESC to stop" because nobody guesses it.
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && auditionEl) stopAudition();
   });
 
   // --- match-explanation popover (clicking the Exact/Fuzzy pill) ------------
