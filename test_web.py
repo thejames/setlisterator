@@ -18,7 +18,7 @@ from web import app
 def client(monkeypatch):
     monkeypatch.setattr(core, "load_config", lambda: {
         "api_key": "k", "plex_baseurl": "http://x", "plex_token": "t",
-        "music_library": "Music"})
+        "music_library": "Music", "audition_always_transcode": True})
     app.config.update(TESTING=True)
     return app.test_client()
 
@@ -1041,7 +1041,7 @@ def _source(mode="direct", url="http://plex.test/library/parts/1/2/f.flac?tok"):
 
 
 def test_audition_returns_source_and_proxy_path(client, monkeypatch):
-    monkeypatch.setattr(core, "audition_source", lambda cfg, key: _source())
+    monkeypatch.setattr(core, "audition_source", lambda cfg, key, force=True, offset=0: _source())
     data = client.get("/audition/55").get_json()
     assert data["mode"] == "direct"
     assert data["direct_url"].startswith("http://plex.test/")
@@ -1053,12 +1053,12 @@ def test_audition_returns_source_and_proxy_path(client, monkeypatch):
 def test_audition_reports_transcode_mode(client, monkeypatch):
     # The client needs the mode to know its scrubber is unreliable.
     monkeypatch.setattr(core, "audition_source",
-                        lambda cfg, key: _source(mode="transcode"))
+                        lambda cfg, key, force=True, offset=0: _source(mode="transcode"))
     assert client.get("/audition/55").get_json()["mode"] == "transcode"
 
 
 def test_audition_plex_error(client, monkeypatch):
-    def boom(cfg, key):
+    def boom(cfg, key, force=True, offset=0):
         raise core.PlexError("gone")
     monkeypatch.setattr(core, "audition_source", boom)
     resp = client.get("/audition/55")
@@ -1093,7 +1093,7 @@ class _FakeUpstream:
 
 
 def _proxy(monkeypatch, upstream, seen=None):
-    monkeypatch.setattr(core, "audition_source", lambda cfg, key: _source())
+    monkeypatch.setattr(core, "audition_source", lambda cfg, key, force=True, offset=0: _source())
 
     def _get(url, headers=None, stream=None, timeout=None):
         if seen is not None:
@@ -1137,7 +1137,7 @@ def test_audition_stream_without_range_sends_none(client, monkeypatch):
 
 def test_audition_stream_upstream_failure_is_a_bare_502(client, monkeypatch):
     # An <audio> element can do nothing with an HTML error page.
-    monkeypatch.setattr(core, "audition_source", lambda cfg, key: _source())
+    monkeypatch.setattr(core, "audition_source", lambda cfg, key, force=True, offset=0: _source())
 
     def _boom(url, headers=None, stream=None, timeout=None):
         raise web.requests.exceptions.ConnectionError("no route")
@@ -1149,7 +1149,7 @@ def test_audition_stream_upstream_failure_is_a_bare_502(client, monkeypatch):
 
 
 def test_audition_stream_plex_error_is_a_bare_502(client, monkeypatch):
-    def boom(cfg, key):
+    def boom(cfg, key, force=True, offset=0):
         raise core.PlexError("gone")
     monkeypatch.setattr(core, "audition_source", boom)
     resp = client.get("/audition/55/stream")
@@ -1187,3 +1187,69 @@ def test_audition_stream_upstream_dying_midway_ends_cleanly(client, monkeypatch)
     assert resp.status_code == 200
     assert resp.data == b"first-chunk"
     assert up.closed
+
+
+# --- audition quality preference and seeking (ADR-0004) ----------------------
+
+def _capture(monkeypatch):
+    """Record the (force_transcode, offset) core is called with."""
+    seen = {}
+
+    def _src(cfg, key, force=True, offset=0):
+        seen["force"], seen["offset"] = force, offset
+        return _source()
+
+    monkeypatch.setattr(core, "audition_source", _src)
+    return seen
+
+
+def test_audition_defaults_to_the_configured_preference(client, monkeypatch):
+    seen = _capture(monkeypatch)
+    client.get("/audition/55")
+    assert seen["force"] is True          # fixture config has it on
+
+
+def test_audition_client_can_turn_transcoding_off(client, monkeypatch):
+    # The setting lives in the browser, so the client sends it every time.
+    seen = _capture(monkeypatch)
+    client.get("/audition/55?transcode=0")
+    assert seen["force"] is False
+
+
+def test_audition_client_can_turn_transcoding_on(client, monkeypatch):
+    seen = _capture(monkeypatch)
+    client.get("/audition/55?transcode=1")
+    assert seen["force"] is True
+
+
+def test_audition_stream_forwards_seek_offset(client, monkeypatch):
+    # A transcode has no byte ranges, so seeking forward restarts it here.
+    seen = _capture(monkeypatch)
+    monkeypatch.setattr(web.requests, "get",
+                        lambda url, headers=None, stream=None, timeout=None:
+                        _FakeUpstream())
+    client.get("/audition/55/stream?offset=180&transcode=1")
+    assert seen["offset"] == 180
+
+
+def test_audition_rejects_a_nonsense_offset(client, monkeypatch):
+    seen = _capture(monkeypatch)
+    client.get("/audition/55?offset=banana")
+    assert seen["offset"] == 0
+
+
+def test_audition_clamps_a_negative_offset(client, monkeypatch):
+    seen = _capture(monkeypatch)
+    client.get("/audition/55?offset=-30")
+    assert seen["offset"] == 0
+
+
+def test_transcode_default_is_exposed_to_templates(client):
+    with app.test_request_context("/"):
+        assert web._inject_plex_baseurl()["audition_transcode_default"] is True
+
+
+def test_settings_gear_renders_in_the_navbar(client):
+    body = client.get("/").data.decode()
+    assert "data-setting-transcode" in body
+    assert 'aria-label="Settings"' in body

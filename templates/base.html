@@ -406,6 +406,17 @@
            padding: 0 6px; font-size: 11px; }
     .aud:hover { color: var(--accent); }
     .auditionbox { margin: 4px 0 6px; }
+    .gear-btn { display: inline-flex; align-items: center; padding: 4px 6px; }
+    /* Right-anchored: it's the last item in the bar and wide enough that the
+       default left: 0 pushes it off the edge of the page. */
+    .settings-menu { min-width: 250px; padding: 4px; left: auto; right: 0; }
+    .setting { display: flex; gap: 9px; align-items: flex-start; cursor: pointer;
+               padding: 9px 10px; border-radius: 5px; }
+    .setting:hover { background: var(--panel3); }
+    .setting input { margin-top: 2px; accent-color: var(--accent); flex: none; }
+    .setting-text { display: flex; flex-direction: column; gap: 3px; }
+    .setting-text b { color: var(--text); font-weight: 600; }
+    .setting-sub { color: var(--dim); font-size: 10px; line-height: 1.45; }
     .auditionrow > td { background: var(--panel3); padding: 8px 12px; }
     .audition {
       display: flex; align-items: center; gap: 10px;
@@ -430,7 +441,8 @@
     .audition .esc { color: var(--faint); flex: none; }
   </style>
 </head>
-<body data-plex-base="{{ plex_baseurl }}">
+<body data-plex-base="{{ plex_baseurl }}"
+      data-transcode-default="{{ '1' if audition_transcode_default else '0' }}">
   <main>
     <nav class="navbar">
       <a class="brand" href="{{ url_for('index') }}">Setlist <span class="arrow">→</span> Plex</a>
@@ -455,6 +467,28 @@
         </span>
         <a href="{{ url_for('attended') }}">Attended</a>
         <a href="{{ url_for('buylist') }}">Buy list</a>
+        <span class="navdrop" data-navdrop>
+          <button type="button" class="navdrop-btn gear-btn" data-navdrop-toggle
+                  aria-expanded="false" aria-haspopup="true" aria-label="Settings"
+                  title="Settings">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
+          <div class="navdrop-menu settings-menu" hidden>
+            <label class="setting">
+              <input type="checkbox" data-setting-transcode>
+              <span class="setting-text">
+                <b>Audition in 256k</b>
+                <span class="setting-sub">Smaller and faster over a remote
+                  link. Off streams the original file.</span>
+              </span>
+            </label>
+          </div>
+        </span>
       </span>
     </nav>
     {% block content %}{% endblock %}

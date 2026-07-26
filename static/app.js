@@ -487,13 +487,27 @@
     if (PLEX_BASE) {
       try {
         // no-cors: we only need "did the connection succeed", not the body.
+        // 4s, not 2: a Tailscale-routed LAN measured 1.16s for this request, so
+        // a tighter budget would misreport a working direct path as unreachable.
+        // The cost of a longer wait is absorbed because this runs at page load.
         await fetch(PLEX_BASE + "/identity",
-                    { mode: "no-cors", signal: AbortSignal.timeout(2000) });
+                    { mode: "no-cors", signal: AbortSignal.timeout(4000) });
         ok = true;
       } catch (err) { ok = false; }
     }
     sessionStorage.setItem("auditionDirect", ok ? "1" : "0");
     return ok;
+  }
+
+  // The audition quality setting (gear menu). Stored per browser, so the
+  // server's configured default only applies until you touch the toggle.
+  function transcodePref() {
+    const saved = localStorage.getItem("auditionTranscode");
+    if (saved !== null) return saved === "1";
+    return document.body.dataset.transcodeDefault !== "0";
+  }
+  function setTranscodePref(on) {
+    localStorage.setItem("auditionTranscode", on ? "1" : "0");
   }
 
   function clockText(secs) {
@@ -550,7 +564,8 @@
 
     let data;
     try {
-      const resp = await fetch("/audition/" + encodeURIComponent(ratingKey));
+      const resp = await fetch("/audition/" + encodeURIComponent(ratingKey) +
+                               "?transcode=" + (transcodePref() ? "1" : "0"));
       data = await resp.json();
       if (!resp.ok || data.error) throw new Error(data.error || "unavailable");
     } catch (err) {
@@ -573,25 +588,67 @@
     // be trusted. A transcode is chunked with no byte ranges, so it cannot be
     // seeked at all — saying so beats a seek bar that silently does nothing.
     const transcoded = data.mode === "transcode";
-    note.textContent = (direct ? "direct" : "proxied") +
-      (transcoded ? " · transcoded, no seek" : "");
-    if (transcoded) note.classList.add("warn");
+    const deliveryNote = (direct ? "direct" : "proxied") +
+      (transcoded ? " · 256k" : "");
+    note.textContent = deliveryNote;
 
     // Plex knows the real duration even when the stream won't declare one.
     const known = data.duration ? data.duration / 1000 : NaN;
 
+    // Where in the track this stream begins. Always 0 for direct audio, which
+    // seeks natively by byte range. For a transcode there are no byte ranges,
+    // so seeking forward means restarting the stream at a new offset — and
+    // then element time is relative to it.
+    let baseOffset = 0;
+    let seeking = false;
+
     function total() {
-      return isFinite(audio.duration) && audio.duration > 0
+      return isFinite(audio.duration) && audio.duration > 0 && !transcoded
         ? audio.duration : known;
     }
+    function position() { return baseOffset + audio.currentTime; }
+
+    // Whether `t` (absolute) is already downloaded, and so free to jump to.
+    // Chrome keeps everything behind the playhead but only ~2.4s ahead, so in
+    // practice this is true for every backward seek and false for a jump
+    // forward — which is exactly the split we want.
+    function isBuffered(t) {
+      const rel = t - baseOffset;
+      for (let i = 0; i < audio.buffered.length; i++) {
+        if (rel >= audio.buffered.start(i) && rel <= audio.buffered.end(i)) return true;
+      }
+      return false;
+    }
+
     function paint() {
+      if (seeking) return;                  // don't fight the user's drag
       const dur = total();
-      time.textContent = clockText(audio.currentTime) + " / " + clockText(dur);
+      time.textContent = clockText(position()) + " / " + clockText(dur);
       if (isFinite(dur) && dur > 0) {
         seek.max = dur;
-        seek.value = audio.currentTime;
-        seek.disabled = transcoded;         // no ranges upstream: seek is a lie
+        seek.value = position();
+        seek.disabled = false;
       }
+    }
+
+    // Restart a transcode at `t` seconds in. Costs a new Plex transcode
+    // session and about a second of rebuffer, so it is the fallback, not the
+    // mechanism — buffered seeks never come through here.
+    async function restartAt(t) {
+      const url = new URL(audio.src, location.origin);
+      url.searchParams.set("offset", Math.floor(t));
+      // Only our own route takes the preference; a direct Plex URL already
+      // encodes the choice in which endpoint it points at.
+      if (url.origin === location.origin) {
+        url.searchParams.set("transcode", transcodePref() ? "1" : "0");
+      }
+      baseOffset = t;
+      const wasPlaying = !audio.paused;
+      audio.src = url.toString();
+      note.textContent = deliveryNote + " · seeking…";
+      try { if (wasPlaying) await audio.play(); } catch (err) { /* ignore */ }
+      note.textContent = deliveryNote;
+      paint();
     }
 
     audio.addEventListener("loadedmetadata", paint);
@@ -607,8 +664,21 @@
       note.classList.add("warn");
       play.disabled = true;
     });
+    // Dragging updates the readout only; the seek itself waits for release,
+    // so scrubbing across a transcode doesn't spawn a Plex session per pixel.
     seek.addEventListener("input", function () {
-      if (!transcoded) audio.currentTime = Number(seek.value);
+      seeking = true;
+      time.textContent = clockText(Number(seek.value)) + " / " + clockText(total());
+    });
+    seek.addEventListener("change", function () {
+      seeking = false;
+      const t = Number(seek.value);
+      if (!transcoded || isBuffered(t)) {
+        audio.currentTime = t - baseOffset;  // free: bytes are already here
+        paint();
+      } else {
+        restartAt(t);                        // forward past the buffer
+      }
     });
     play.addEventListener("click", function () {
       if (audio.paused) { audio.play(); play.textContent = "❚❚"; }
@@ -754,6 +824,14 @@
       if (!row) return;
       mountAudition(row, spot.dataset.audKey, true, null);
     });
+  });
+
+  // Settings: the audition quality toggle in the gear menu. Applies to the
+  // next audition — an in-flight one is left alone rather than restarted
+  // under the user.
+  document.querySelectorAll("[data-setting-transcode]").forEach(function (cb) {
+    cb.checked = transcodePref();
+    cb.addEventListener("change", function () { setTranscodePref(cb.checked); });
   });
 
   // Warm the reachability verdict now rather than on the first click: an

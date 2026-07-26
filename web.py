@@ -50,9 +50,11 @@ def _inject_plex_baseurl():
     Deliberately swallows a config error: a broken .env should fail on the page
     the user asked for, not on every render."""
     try:
-        return {"plex_baseurl": core.load_config()["plex_baseurl"]}
+        config = core.load_config()
+        return {"plex_baseurl": config["plex_baseurl"],
+                "audition_transcode_default": config["audition_always_transcode"]}
     except Exception:
-        return {"plex_baseurl": ""}
+        return {"plex_baseurl": "", "audition_transcode_default": True}
 
 
 # Poster upload: an optional browser image saved to a temp file for the core
@@ -288,6 +290,23 @@ _AUDITION_PASSTHRU = ("content-type", "content-length",
                       "accept-ranges", "content-range")
 
 
+def _audition_args(config):
+    """The two per-request knobs: quality preference and seek position.
+
+    `transcode` is the UI setting, sent by the client because it is stored per
+    browser; absent, the server's configured default applies. `offset` is only
+    meaningful for a transcode, which has no byte ranges to seek with.
+    """
+    raw = request.args.get("transcode")
+    force = config["audition_always_transcode"] if raw is None \
+        else core.truthy(raw)
+    try:
+        offset = max(0, int(float(request.args.get("offset") or 0)))
+    except ValueError:
+        offset = 0
+    return force, offset
+
+
 @app.get("/audition/<rating_key>")
 def audition(rating_key):
     """What the client needs to audition one track (JSON).
@@ -298,7 +317,8 @@ def audition(rating_key):
     """
     try:
         config = core.load_config()
-        src = core.audition_source(config, rating_key)
+        force, offset = _audition_args(config)
+        src = core.audition_source(config, rating_key, force, offset)
     except core.ConfigError as exc:
         return jsonify(error=str(exc)), 400
     except core.PlexError as exc:
@@ -321,7 +341,8 @@ def audition_stream(rating_key):
     """
     try:
         config = core.load_config()
-        src = core.audition_source(config, rating_key)
+        force, offset = _audition_args(config)
+        src = core.audition_source(config, rating_key, force, offset)
     except core.ConfigError:
         return "", 400
     except core.PlexError:

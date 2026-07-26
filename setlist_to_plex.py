@@ -97,6 +97,20 @@ class PlexError(Exception):
     """Connecting to Plex, finding the library, or creating a playlist failed."""
 
 
+def truthy(raw):
+    """Is this string a yes? Single source for flags from env and query alike,
+    so an env var and a URL parameter can't disagree about what 'on' means."""
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_flag(name, default):
+    """Read a boolean environment variable, falling back when it isn't set."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return truthy(raw)
+
+
 def load_config():
     """Read configuration from the environment (and a .env file).
 
@@ -109,6 +123,10 @@ def load_config():
         "plex_baseurl": os.environ.get("PLEX_BASEURL"),
         "plex_token": os.environ.get("PLEX_TOKEN"),
         "music_library": os.environ.get("PLEX_MUSIC_LIBRARY", "Music"),
+        # Default for the audition quality preference; the UI can override it
+        # per browser. On by default: auditions are for identifying a song, and
+        # capped MP3 costs a quarter of the bytes of the average FLAC here.
+        "audition_always_transcode": _env_flag("AUDITION_ALWAYS_TRANSCODE", True),
     }
     missing = [name for name, key in (
         ("SETLISTFM_API_KEY", "api_key"),
@@ -1648,20 +1666,26 @@ AUDITION_DIRECT_CODECS = frozenset({"mp3", "aac", "flac", "opus", "vorbis", "pcm
 AUDITION_MAX_BITRATE = 256
 
 
-def audition_mode(codec):
+def audition_mode(codec, force_transcode=False):
     """'direct' if a browser can decode `codec` as-is, else 'transcode'.
+
+    `force_transcode` is the quality preference — on, every track transcodes
+    regardless of codec, which is what makes an audition cheap over a remote
+    link (a capped MP3 is roughly a quarter of the bytes of the average FLAC
+    here). Compatibility still overrides preference in the other direction:
+    turning it off never makes an undecodable codec play directly.
 
     Unknown or missing codecs transcode. That is the safe direction: a
     transcode that wasn't needed still plays, whereas a direct stream the
     browser can't decode is indistinguishable from silence.
     """
-    if not codec:
+    if force_transcode or not codec:
         return "transcode"
     return "direct" if str(codec).strip().lower() in AUDITION_DIRECT_CODECS \
         else "transcode"
 
 
-def audition_source(config, rating_key):
+def audition_source(config, rating_key, force_transcode=False, offset=0):
     """Everything needed to audition one track.
 
     Returns ``{mode, rating_key, direct_url, duration, title, artist, album}``.
@@ -1683,8 +1707,8 @@ def audition_source(config, rating_key):
         media = (getattr(track, "media", None) or [None])[0]
         if media is None:
             raise ValueError("track has no media")
-        mode = audition_mode(getattr(media, "audioCodec", None))
-        direct_url = _audition_direct_url(plex, track, media, mode)
+        mode = audition_mode(getattr(media, "audioCodec", None), force_transcode)
+        direct_url = _audition_direct_url(plex, track, media, mode, offset)
     except Exception as exc:
         raise PlexError(f"Could not load track: {exc}") from exc
     return {
@@ -1698,13 +1722,18 @@ def audition_source(config, rating_key):
     }
 
 
-def _audition_direct_url(plex, track, media, mode):
+def _audition_direct_url(plex, track, media, mode, offset=0):
     """The Plex URL an audition reads from, tokenized.
 
     Direct mode serves the original file part, which supports HTTP Range — that
-    is what makes the scrubber accurate. Transcode mode asks Plex for capped
-    MP3 instead; that stream is chunked with no Content-Length, so the client
-    treats its scrubber as approximate (which is why `mode` is returned).
+    is what makes the scrubber accurate, and why `offset` is meaningless there
+    (the client seeks by byte range instead).
+
+    Transcode mode asks Plex for capped MP3, which serves no byte ranges at
+    all: a Range request comes back 200 from the top of the file. `offset` is
+    how you seek such a stream — Plex begins encoding at that many seconds in,
+    so the client restarts the stream to move forward. Verified against the
+    live server: offset=180 on a 369s track returns ~195s of audio.
     """
     if mode == "direct":
         part = (getattr(media, "parts", None) or [None])[0]
@@ -1716,7 +1745,7 @@ def _audition_direct_url(plex, track, media, mode):
         "mediaIndex": 0,
         "partIndex": 0,
         "protocol": "http",
-        "offset": 0,
+        "offset": max(0, int(offset or 0)),
         "copyts": 0,
         "maxAudioBitrate": AUDITION_MAX_BITRATE,
         "X-Plex-Platform": "Chrome",
