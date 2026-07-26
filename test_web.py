@@ -1030,3 +1030,160 @@ def test_attended_post_no_shows(client, monkeypatch):
     resp = client.post("/attended", data={"username": "bob"})
     assert resp.status_code == 200
     assert "No attended shows found" in resp.data.decode()
+
+
+# --- auditioning (ADR-0004) --------------------------------------------------
+
+def _source(mode="direct", url="http://plex.test/library/parts/1/2/f.flac?tok"):
+    return {"mode": mode, "rating_key": 55, "direct_url": url,
+            "duration": 615000, "title": "Tweezer", "artist": "Phish",
+            "album": "A Live One"}
+
+
+def test_audition_returns_source_and_proxy_path(client, monkeypatch):
+    monkeypatch.setattr(core, "audition_source", lambda cfg, key: _source())
+    data = client.get("/audition/55").get_json()
+    assert data["mode"] == "direct"
+    assert data["direct_url"].startswith("http://plex.test/")
+    assert data["duration"] == 615000
+    # The proxy path is the web layer's to compose, not core's.
+    assert data["stream_path"] == "/audition/55/stream"
+
+
+def test_audition_reports_transcode_mode(client, monkeypatch):
+    # The client needs the mode to know its scrubber is unreliable.
+    monkeypatch.setattr(core, "audition_source",
+                        lambda cfg, key: _source(mode="transcode"))
+    assert client.get("/audition/55").get_json()["mode"] == "transcode"
+
+
+def test_audition_plex_error(client, monkeypatch):
+    def boom(cfg, key):
+        raise core.PlexError("gone")
+    monkeypatch.setattr(core, "audition_source", boom)
+    resp = client.get("/audition/55")
+    assert resp.status_code == 502
+    assert "error" in resp.get_json()
+
+
+def test_audition_config_error(client, monkeypatch):
+    def boom():
+        raise core.ConfigError("Missing required environment variable(s): X")
+    monkeypatch.setattr(core, "load_config", boom)
+    resp = client.get("/audition/55")
+    assert resp.status_code == 400
+
+
+class _FakeUpstream:
+    """Stands in for Plex's response to the proxy's request."""
+
+    def __init__(self, status=200, headers=None, body=b"audio-bytes"):
+        self.status_code = status
+        self.headers = headers or {"Content-Type": "audio/flac",
+                                   "Content-Length": "11",
+                                   "Accept-Ranges": "bytes"}
+        self._body = body
+        self.closed = False
+
+    def iter_content(self, size):
+        yield self._body
+
+    def close(self):
+        self.closed = True
+
+
+def _proxy(monkeypatch, upstream, seen=None):
+    monkeypatch.setattr(core, "audition_source", lambda cfg, key: _source())
+
+    def _get(url, headers=None, stream=None, timeout=None):
+        if seen is not None:
+            seen.update(headers or {})
+        return upstream
+
+    monkeypatch.setattr(web.requests, "get", _get)
+    return upstream
+
+
+def test_audition_stream_pipes_audio_through(client, monkeypatch):
+    up = _proxy(monkeypatch, _FakeUpstream())
+    resp = client.get("/audition/55/stream")
+    assert resp.status_code == 200
+    assert resp.data == b"audio-bytes"
+    assert resp.headers["Content-Type"] == "audio/flac"
+    assert resp.headers["Accept-Ranges"] == "bytes"
+    assert up.closed          # the pipe must be closed, not just dropped
+
+
+def test_audition_stream_forwards_range_and_partial_status(client, monkeypatch):
+    # Seeking only works if Range goes up and 206/Content-Range come back.
+    seen = {}
+    _proxy(monkeypatch, _FakeUpstream(
+        status=206,
+        headers={"Content-Type": "audio/flac", "Content-Length": "1000",
+                 "Content-Range": "bytes 1000-1999/46011756",
+                 "Accept-Ranges": "bytes"}), seen=seen)
+    resp = client.get("/audition/55/stream", headers={"Range": "bytes=1000-1999"})
+    assert seen.get("Range") == "bytes=1000-1999"
+    assert resp.status_code == 206
+    assert resp.headers["Content-Range"] == "bytes 1000-1999/46011756"
+
+
+def test_audition_stream_without_range_sends_none(client, monkeypatch):
+    seen = {}
+    _proxy(monkeypatch, _FakeUpstream(), seen=seen)
+    client.get("/audition/55/stream")
+    assert "Range" not in seen
+
+
+def test_audition_stream_upstream_failure_is_a_bare_502(client, monkeypatch):
+    # An <audio> element can do nothing with an HTML error page.
+    monkeypatch.setattr(core, "audition_source", lambda cfg, key: _source())
+
+    def _boom(url, headers=None, stream=None, timeout=None):
+        raise web.requests.exceptions.ConnectionError("no route")
+
+    monkeypatch.setattr(web.requests, "get", _boom)
+    resp = client.get("/audition/55/stream")
+    assert resp.status_code == 502
+    assert resp.data == b""
+
+
+def test_audition_stream_plex_error_is_a_bare_502(client, monkeypatch):
+    def boom(cfg, key):
+        raise core.PlexError("gone")
+    monkeypatch.setattr(core, "audition_source", boom)
+    resp = client.get("/audition/55/stream")
+    assert resp.status_code == 502
+    assert resp.data == b""
+
+
+def test_plex_baseurl_is_exposed_for_the_probe(client, monkeypatch):
+    # The client can't probe reachability without knowing where Plex is.
+    with app.test_request_context("/"):
+        assert web._inject_plex_baseurl()["plex_baseurl"] == "http://x"
+
+
+def test_plex_baseurl_injection_survives_a_broken_config(monkeypatch):
+    def boom():
+        raise core.ConfigError("Missing required environment variable(s): X")
+    monkeypatch.setattr(core, "load_config", boom)
+    with app.test_request_context("/"):
+        assert web._inject_plex_baseurl()["plex_baseurl"] == ""
+
+
+class _DyingUpstream(_FakeUpstream):
+    """Plex hanging up after the response has started."""
+
+    def iter_content(self, size):
+        yield b"first-chunk"
+        raise web.requests.exceptions.ConnectionError("upstream died")
+
+
+def test_audition_stream_upstream_dying_midway_ends_cleanly(client, monkeypatch):
+    # Headers are already sent by then, so there is no status left to change;
+    # the stream must just stop instead of raising out of the worker.
+    up = _proxy(monkeypatch, _DyingUpstream())
+    resp = client.get("/audition/55/stream")
+    assert resp.status_code == 200
+    assert resp.data == b"first-chunk"
+    assert up.closed

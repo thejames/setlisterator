@@ -21,7 +21,9 @@ import os
 import tempfile
 import uuid
 
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+import requests
+from flask import (Flask, Response, jsonify, redirect, render_template,
+                   request, stream_with_context, url_for)
 
 import setlist_to_plex as core
 
@@ -39,6 +41,18 @@ def _inject_poster_policy():
     return {"poster_policy": {"accept": core.POSTER_ACCEPT,
                               "max_bytes": core.POSTER_MAX_BYTES,
                               "max_label": core.POSTER_MAX_LABEL}}
+
+
+@app.context_processor
+def _inject_plex_baseurl():
+    """Expose the Plex base URL to templates so the client can probe whether it
+    can reach Plex itself (ADR-0004). Not a secret — the token is not included.
+    Deliberately swallows a config error: a broken .env should fail on the page
+    the user asked for, not on every render."""
+    try:
+        return {"plex_baseurl": core.load_config()["plex_baseurl"]}
+    except Exception:
+        return {"plex_baseurl": ""}
 
 
 # Poster upload: an optional browser image saved to a temp file for the core
@@ -259,6 +273,89 @@ def album_tracks(rating_key):
     except core.PlexError as exc:
         return jsonify(error=str(exc)), 502
     return jsonify(tracks=tracks)
+
+
+# --- auditioning (ADR-0004) --------------------------------------------------
+# Two routes: one hands the client what it needs to play a track, the other is
+# the fallback pipe for when the browser can't reach Plex itself. Best-effort
+# throughout — a failure here is reported and never touches a selection.
+
+_AUDITION_CHUNK = 64 * 1024
+
+# Headers worth forwarding from Plex. Content-Range/Accept-Ranges are what make
+# the scrubber seekable, so they must survive the hop.
+_AUDITION_PASSTHRU = ("content-type", "content-length",
+                      "accept-ranges", "content-range")
+
+
+@app.get("/audition/<rating_key>")
+def audition(rating_key):
+    """What the client needs to audition one track (JSON).
+
+    Returns core's source data plus `stream_path`, the proxy URL — composed
+    here because routes belong to the web layer, not to core. The client picks
+    between `direct_url` and `stream_path` using its own reachability probe.
+    """
+    try:
+        config = core.load_config()
+        src = core.audition_source(config, rating_key)
+    except core.ConfigError as exc:
+        return jsonify(error=str(exc)), 400
+    except core.PlexError as exc:
+        return jsonify(error=str(exc)), 502
+    src["stream_path"] = url_for("audition_stream",
+                                 rating_key=src["rating_key"])
+    return jsonify(**src)
+
+
+@app.get("/audition/<rating_key>/stream")
+def audition_stream(rating_key):
+    """Pipe a track's audio from Plex to the browser.
+
+    For clients that can't reach Plex directly. The Range header is forwarded
+    and Plex's response status and range headers are passed straight back, so
+    seeking still works on direct (non-transcoded) audio.
+
+    Errors are bare statuses, not HTML: an <audio> element is the only consumer
+    and it can do nothing with an error page.
+    """
+    try:
+        config = core.load_config()
+        src = core.audition_source(config, rating_key)
+    except core.ConfigError:
+        return "", 400
+    except core.PlexError:
+        return "", 502
+
+    headers = {}
+    if request.headers.get("Range"):
+        headers["Range"] = request.headers["Range"]
+    try:
+        upstream = requests.get(src["direct_url"], headers=headers,
+                                stream=True, timeout=20)
+    except requests.exceptions.RequestException:
+        return "", 502
+
+    # The connection is held open for as long as the browser is playing, and
+    # this app ships on one gunicorn worker with four threads — so the pipe has
+    # to be closed, not merely dropped, whenever playback stops or the client
+    # goes away. Hence the finally: GeneratorExit on disconnect lands there too.
+    def _pump():
+        try:
+            for chunk in upstream.iter_content(_AUDITION_CHUNK):
+                yield chunk
+        except requests.exceptions.RequestException:
+            # Plex went away mid-stream. The status line is long gone, so there
+            # is no error to report — stop cleanly rather than raise out of a
+            # half-sent response. The audition dies; nothing else notices.
+            pass
+        finally:
+            upstream.close()
+
+    passthru = {k: v for k, v in upstream.headers.items()
+                if k.lower() in _AUDITION_PASSTHRU}
+    return Response(stream_with_context(_pump()),
+                    status=upstream.status_code, headers=passthru)
 
 
 def _parse_and_match(req):
