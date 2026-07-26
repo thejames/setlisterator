@@ -1,6 +1,6 @@
 # Setlist-er-ator
 
-Turns a setlist.fm show into a Plex playlist. This glossary covers the language of the **preview** step — the human review screen between matching a setlist and creating the playlist — and of the **playlist summary** the app writes back to Plex.
+Turns a setlist.fm show into a Plex playlist. This glossary covers the language of the **preview** step — the human review screen between matching a setlist and creating the playlist — of **auditioning** a track before choosing it, and of the **playlist summary** the app writes back to Plex.
 
 ## Language
 
@@ -14,7 +14,12 @@ _Avoid_: Pick, choice, match (a *match* is what the matcher proposes; a *selecti
 
 **Touched selection**:
 A selection the user has explicitly acted on — changing the version, re-pointing it via search, accepting or rejecting a fuzzy match, filling a missing song, or toggling its include state. Intent-based, not diff-based: interacting with a row freezes it even if the resulting value equals what the matcher proposed. The opposite is an **untouched** selection, still exactly as the matcher proposed it.
+**Auditioning is not a touch** — listening is how you decide, not a decision.
 _Avoid_: Edited, dirty, manual.
+
+**Audition**:
+Listening to a candidate track in the app to check it's the song you expect, before deciding whether to select it. Any candidate can be auditioned, not just the selected one, so two versions of a song can be compared without committing to either — an audition leaves the selection untouched and still eligible for re-match. Not a Plex playback session: it plays to your browser, not to a Plex client.
+_Avoid_: Preview (that's the review screen), play/playback (that's what Plex does to a client), sample, scrub (that's the control, not the act).
 
 **Sticky**:
 The property that a touched selection survives a re-match within the same preview session. Changing the preferred album re-matches only untouched selections; touched ones are frozen.
