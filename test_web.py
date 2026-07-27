@@ -1285,3 +1285,26 @@ def test_stream_path_preference_survives_the_round_trip(client, monkeypatch):
                         _FakeUpstream())
     client.get(path)
     assert seen["force"] is False
+
+
+def test_audition_controls_are_focusable_buttons(client, monkeypatch):
+    # A <span> inside a <button> can be clicked but never focused. Every
+    # audition control must be a real button, and a sibling of what it plays —
+    # a button nested in a button is invalid HTML.
+    monkeypatch.setattr(core, "load_config", lambda: {
+        "api_key": "k", "plex_baseurl": "http://x", "plex_token": "t",
+        "music_library": "Music", "audition_always_transcode": True})
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _preview_result())
+    body = client.post("/preview", data={"setlist": "abc123"}).data.decode()
+    assert 'class="aud-btn dd-aud"' in body          # a real <button>
+    assert 'class="aud"' not in body                 # no span stand-ins left
+    # the control sits beside its option, inside the pair wrapper
+    assert body.index('class="dd-row"') < body.index('class="dd-opt')
+
+
+def test_audition_wording_avoids_the_reserved_terms(client, monkeypatch):
+    # CONTEXT.md reserves play/playback for what Plex does to a client.
+    monkeypatch.setattr(core, "gather_matches", lambda *a, **k: _preview_result())
+    body = client.post("/preview", data={"setlist": "abc123"}).data.decode()
+    assert "Audition" in body
+    assert "playback" not in body.lower()

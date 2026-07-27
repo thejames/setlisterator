@@ -400,11 +400,16 @@
     }
     .aud-btn:hover { color: var(--accent); border-color: var(--accent); }
     .aud-btn.playing { color: var(--accent); border-color: var(--accent); }
-    /* Inside a dropdown option or a search result: a span, not a button —
-       these live inside a <button>, where a nested button is invalid. */
-    .aud { color: var(--dim); cursor: pointer; flex: none;
-           padding: 0 6px; font-size: 11px; }
-    .aud:hover { color: var(--accent); }
+    /* An audition control always sits *beside* what it plays, never inside it:
+       a button nested in a button is invalid HTML, and the <span> that would
+       otherwise be needed cannot be focused or reached by keyboard. */
+    .auditionrow-pair, .dd-row { display: flex; align-items: stretch; gap: 6px; }
+    .auditionrow-pair { margin: 4px 0; }
+    .auditionrow-pair > .result { flex: 1; margin: 0; min-width: 0; }
+    .dd-row > .dd-opt { flex: 1; min-width: 0; }
+    .dd-row > .dd-aud { border: none; border-radius: 0; padding: 0 10px; }
+    .dd-row:hover > .dd-aud { color: var(--accent); }
+    .album-tracks .auditionrow-pair { margin: 0; }
     .auditionbox { margin: 4px 0 6px; }
     /* Picker row actions on one line — stacked, they make every row taller.
        Distinct from .rowactions, which is the History/Playlists row toolbar. */
@@ -431,7 +436,7 @@
       background: var(--panel3); border: 1px solid var(--border);
       border-radius: 6px; padding: 8px 10px;
     }
-    .audition .play {
+    .audition .aud-toggle {
       background: var(--accent); color: #17130A; border: 0; border-radius: 4px;
       cursor: pointer; font: 600 11px/1 var(--mono); padding: 7px 10px;
       flex: none; min-width: 34px;
