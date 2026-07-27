@@ -124,15 +124,17 @@
               </button>
               <div class="dd-menu" hidden>
                 {% for c in s.candidates %}
-                <button type="button" class="dd-opt{% if loop.first %} sel{% endif %}"
-                        data-key="{{ c.rating_key }}"
-                        data-title="{{ c.track_artist }} — {{ c.track_title }}"
-                        data-sub="{{ c.album }}{% if c.album %} · {% endif %}{{ c.tier }}/{{ c.source }}">
-                  <span class="aud" data-aud-key="{{ c.rating_key }}"
-                        title="Audition this version">▶</span>
-                  <span class="dd-title trunc">{{ c.track_artist }} — {{ c.track_title }}</span>
-                  <span class="dd-sub trunc">{{ c.album }}{% if c.album %} · {% endif %}{{ c.tier }}/{{ c.source }}</span>
-                </button>
+                <div class="dd-row">
+                  <button type="button" class="dd-opt{% if loop.first %} sel{% endif %}"
+                          data-key="{{ c.rating_key }}"
+                          data-title="{{ c.track_artist }} — {{ c.track_title }}"
+                          data-sub="{{ c.album }}{% if c.album %} · {% endif %}{{ c.tier }}/{{ c.source }}">
+                    <span class="dd-title trunc">{{ c.track_artist }} — {{ c.track_title }}</span>
+                    <span class="dd-sub trunc">{{ c.album }}{% if c.album %} · {% endif %}{{ c.tier }}/{{ c.source }}</span>
+                  </button>
+                  <button type="button" class="aud-btn dd-aud" data-aud-key="{{ c.rating_key }}"
+                          title="Audition this version" aria-label="Audition this version">▶</button>
+                </div>
                 {% endfor %}
               </div>
             </div>

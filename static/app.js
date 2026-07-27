@@ -45,6 +45,25 @@
     }
   }
 
+  // Pair a pickable control with its own audition button, side by side. The
+  // button is a sibling, not a child: nested interactive content is invalid
+  // HTML, and a <span> stand-in can be clicked but never focused or reached by
+  // keyboard. The player opens beneath the pair.
+  function auditionRow(pickEl, ratingKey) {
+    const row = el("div", "auditionrow-pair");
+    const aud = el("button", "aud-btn", "▶");
+    aud.type = "button";
+    aud.title = "Audition this track";
+    aud.setAttribute("aria-label", "Audition this track");
+    aud.addEventListener("click", function () {
+      if (aud.classList.contains("playing")) { stopAudition(); return; }
+      mountAudition(row, ratingKey, false, aud);
+    });
+    row.appendChild(pickEl);
+    row.appendChild(aud);
+    return row;
+  }
+
   // --- manual library search (shared by missing cards and matched rows) ----
   // `scope` is any element containing a `.q` input and a `.results` box; each
   // result button invokes onPick(track, label).
@@ -77,19 +96,8 @@
       b.type = "button";
       const st = stars(t.rating);
       if (st) b.appendChild(el("span", "result-stars", st));
-      // Audition a hit before committing to it. A span, not a button — this
-      // sits inside the result button — and it stops the click there so
-      // listening never counts as picking.
-      const aud = el("span", "aud", "▶");
-      aud.title = "Audition this track";
-      aud.addEventListener("click", function (e) {
-        e.stopPropagation();
-        e.preventDefault();
-        mountAudition(b, t.rating_key, false, null);
-      });
-      b.appendChild(aud);
       b.addEventListener("click", function () { onPick(t, label); });
-      results.appendChild(b);
+      results.appendChild(auditionRow(b, t.rating_key));
     });
   }
 
@@ -129,17 +137,8 @@
             tb.type = "button";
             const st = stars(tr.rating);
             if (st) tb.appendChild(el("span", "result-stars", st));
-            // Same as a plain search hit: hear it before you pick it.
-            const tAud = el("span", "aud", "▶");
-            tAud.title = "Audition this track";
-            tAud.addEventListener("click", function (e) {
-              e.stopPropagation();
-              e.preventDefault();
-              mountAudition(tb, tr.rating_key, false, null);
-            });
-            tb.appendChild(tAud);
             tb.addEventListener("click", function () { onPick(tr, tr.title); });
-            sub.appendChild(tb);
+            sub.appendChild(auditionRow(tb, tr.rating_key));
           });
           if (!sub.children.length) sub.textContent = "no tracks in this album";
         } catch (e) { sub.textContent = "couldn't load album"; loaded = false; }
@@ -193,18 +192,10 @@
         opt.dataset.key = track.rating_key;
         opt.dataset.title = title;
         opt.dataset.sub = sub;
-        const optAud = el("span", "aud", "▶");
-        optAud.dataset.audKey = track.rating_key;
-        optAud.title = "Audition this version";
-        optAud.addEventListener("click", function (e) {
-          e.stopPropagation(); e.preventDefault();
-          mountAudition(row, track.rating_key, true, null);
-        });
-        opt.appendChild(optAud);
         opt.appendChild(el("span", "dd-title trunc", title));
         opt.appendChild(el("span", "dd-sub trunc", sub));
         opt.addEventListener("click", function () { selectDdOpt(opt); });
-        menu.appendChild(opt);
+        menu.appendChild(ddRow(opt, track.rating_key));
       }
       selectDdOpt(opt);                             // sets pick + display + sel
     } else {                                        // single-candidate row
@@ -250,6 +241,38 @@
       btn.setAttribute("aria-expanded", "false");
     });
   }
+  // Auditioning a candidate must never select it — merely listening would
+  // touch the row and freeze it against re-match. Being a sibling of the
+  // option rather than a child is what guarantees that: the click cannot
+  // reach the option's handler at all.
+  function wireDdAudition(aud) {
+    aud.addEventListener("click", function (e) {
+      // Not to protect the option — being its sibling already does that — but
+      // to keep the document-level handler from closing the menu. Comparing
+      // two versions means auditioning both without it shutting between them.
+      e.stopPropagation();
+      const row = aud.closest("tr[data-rownum]");
+      if (!row) return;
+      if (aud.classList.contains("playing")) { stopAudition(); return; }
+      mountAudition(row, aud.dataset.audKey, true, aud);
+    });
+  }
+
+  // Pair a dropdown option with its own audition button. Same reasoning as
+  // auditionRow(): a sibling button, so it can be tabbed to.
+  function ddRow(opt, ratingKey) {
+    const row = el("div", "dd-row");
+    const aud = el("button", "aud-btn dd-aud", "▶");
+    aud.type = "button";
+    aud.dataset.audKey = ratingKey;
+    aud.title = "Audition this version";
+    aud.setAttribute("aria-label", "Audition this version");
+    wireDdAudition(aud);
+    row.appendChild(opt);
+    row.appendChild(aud);
+    return row;
+  }
+
   // Apply a dropdown option's choice to its row (hidden pick + button display).
   function selectDdOpt(opt) {
     const dd = opt.closest("[data-dd]");
@@ -382,7 +405,7 @@
     if (!menu || !cands.length) return;
     cands.forEach(function (c) {                    // move options into new order
       const opt = menu.querySelector('.dd-opt[data-key="' + c.rating_key + '"]');
-      if (opt) menu.appendChild(opt);
+      if (opt) menu.appendChild(opt.closest(".dd-row") || opt);
     });
     menu.querySelectorAll(".dd-opt").forEach(function (o) { o.classList.remove("sel"); });
     const lead = cands[0];
@@ -585,8 +608,8 @@
     stopAudition();
 
     const box = el("div", "audition");
-    const play = el("button", "play", "▶"); play.type = "button";
-    play.disabled = true;
+    const toggle = el("button", "aud-toggle", "▶"); toggle.type = "button";
+    toggle.disabled = true;
     const seek = document.createElement("input");
     seek.type = "range"; seek.className = "seek";
     seek.min = 0; seek.max = 1; seek.step = 0.1; seek.value = 0;
@@ -594,7 +617,7 @@
     const time = el("span", "time", "0:00 / –:––");
     const what = el("span", "what", "loading…");
     const note = el("span", "note", "");
-    box.append(play, seek, time, what, note, el("span", "esc", "ESC to stop"));
+    box.append(toggle, seek, time, what, note, el("span", "esc", "ESC to stop"));
 
     let host;
     if (asRow) {
@@ -615,7 +638,7 @@
     if (trigger) trigger.classList.add("playing");
 
     // Pinned for the life of this audition: re-reading it on a seek would let
-    // a mid-playback toggle change the stream's mode while the offset
+    // a mid-audition toggle change the stream's mode while the offset
     // arithmetic still assumed the old one.
     const pref = transcodePref();
     let data;
@@ -712,15 +735,15 @@
     audio.addEventListener("loadedmetadata", paint);
     audio.addEventListener("timeupdate", paint);
     audio.addEventListener("ended", function () {
-      play.textContent = "▶";
+      toggle.textContent = "▶";
       if (trigger) trigger.classList.remove("playing");
     });
     audio.addEventListener("error", function () {
-      what.textContent = "playback failed";
+      what.textContent = "audition failed";
       note.textContent = direct
         ? "couldn't reach Plex from the browser" : "stream error";
       note.classList.add("warn");
-      play.disabled = true;
+      toggle.disabled = true;
     });
     // Dragging updates the readout only; the seek itself waits for release,
     // so scrubbing across a transcode doesn't spawn a Plex session per pixel.
@@ -738,15 +761,15 @@
         restartAt(t);                        // forward past the buffer
       }
     });
-    play.addEventListener("click", function () {
-      if (audio.paused) { audio.play(); play.textContent = "❚❚"; }
-      else { audio.pause(); play.textContent = "▶"; }
+    toggle.addEventListener("click", function () {
+      if (audio.paused) { audio.play(); toggle.textContent = "❚❚"; }
+      else { audio.pause(); toggle.textContent = "▶"; }
     });
 
-    play.disabled = false;
-    play.textContent = "❚❚";
+    toggle.disabled = false;
+    toggle.textContent = "❚❚";
     paint();
-    try { await audio.play(); } catch (err) { play.textContent = "▶"; }
+    try { await audio.play(); } catch (err) { toggle.textContent = "▶"; }
   }
 
   // The row's current pick — the hidden input both single- and multi-candidate
@@ -870,19 +893,7 @@
     });
   });
 
-  // Audition one candidate from inside an open dropdown. The listener sits on
-  // the span, so it runs before the option's own click handler and stops it
-  // there: auditioning a candidate must not select it, or merely listening
-  // would touch the row and freeze it against re-match.
-  document.querySelectorAll(".dd-opt .aud").forEach(function (spot) {
-    spot.addEventListener("click", function (e) {
-      e.stopPropagation();
-      e.preventDefault();
-      const row = spot.closest("tr[data-rownum]");
-      if (!row) return;
-      mountAudition(row, spot.dataset.audKey, true, null);
-    });
-  });
+  document.querySelectorAll("[data-aud-key]").forEach(wireDdAudition);
 
   // Settings: the audition quality toggle in the gear menu. Applies to the
   // next audition — an in-flight one is left alone rather than restarted
