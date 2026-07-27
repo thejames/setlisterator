@@ -97,6 +97,7 @@ Copy `.env.example` to `.env` and fill it in:
 | `PLEX_MUSIC_LIBRARY` | no       | library section name (default `Music`)           |
 | `SETLIST_TO_PLEX_HISTORY` | no  | history file path (default below)                |
 | `PORT`               | no       | web app port (default `5001`; web UI only)       |
+| `AUDITION_ALWAYS_TRANSCODE` | no | audition at 256k instead of the original file (default on) |
 
 ## Usage
 
@@ -195,6 +196,24 @@ links out to the show on setlist.fm in a new tab. The **Prefer album** dropdown
 re-matches multi-album songs to a chosen album in place; any row you've already
 touched (a hand-pick, an accepted fuzzy, a filled-in missing track) stays put
 and is marked, so switching albums never discards your edits.
+
+**Audition** (▶) lets you hear a track before you commit to it — the point
+being to check a match is the song you actually expect. It's on every place a
+track gets chosen: preview rows, each version inside a multi-match dropdown,
+fuzzy-match cards, library search results, album expansions, and the rows of a
+playlist you're building or editing. A small player opens beside whatever
+you're listening to, with play/pause, a scrubber and elapsed/total; **Esc**
+stops it. Auditioning a candidate never selects it and never marks a row as
+edited, so you can compare two versions of a song without disturbing anything.
+
+Audio plays to your browser, not to a Plex client, so it isn't a Plex playback
+session. The app checks once per tab whether your browser can reach Plex
+directly; if it can't (behind a VPN, or with the app served over HTTPS), it
+proxies the audio through itself instead, so auditioning works wherever the app
+does. By default tracks are auditioned as 256k MP3 — smaller and faster over a
+remote link, and enough to identify a song — which you can turn off under the
+**gear menu** to stream the original file instead. Formats a browser can't
+decode (ALAC, WMA) are always transcoded, so they play either way.
 
 **Playlist image** (optional): pick a JPEG/PNG/WebP (up to 10 MB) to set as the
 playlist's poster in Plex — no need to add it through the Plex UI afterward. It

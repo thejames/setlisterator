@@ -18,7 +18,7 @@ from web import app
 def client(monkeypatch):
     monkeypatch.setattr(core, "load_config", lambda: {
         "api_key": "k", "plex_baseurl": "http://x", "plex_token": "t",
-        "music_library": "Music"})
+        "music_library": "Music", "audition_always_transcode": True})
     app.config.update(TESTING=True)
     return app.test_client()
 
@@ -1030,3 +1030,258 @@ def test_attended_post_no_shows(client, monkeypatch):
     resp = client.post("/attended", data={"username": "bob"})
     assert resp.status_code == 200
     assert "No attended shows found" in resp.data.decode()
+
+
+# --- auditioning (ADR-0004) --------------------------------------------------
+
+def _source(mode="direct", url="http://plex.test/library/parts/1/2/f.flac?tok"):
+    return {"mode": mode, "rating_key": 55, "direct_url": url,
+            "duration": 615000, "title": "Tweezer", "artist": "Phish",
+            "album": "A Live One"}
+
+
+def test_audition_returns_source_and_proxy_path(client, monkeypatch):
+    monkeypatch.setattr(core, "audition_source", lambda cfg, key, force=True, offset=0: _source())
+    data = client.get("/audition/55").get_json()
+    assert data["mode"] == "direct"
+    assert data["direct_url"].startswith("http://plex.test/")
+    assert data["duration"] == 615000
+    # The proxy path is the web layer's to compose, not core's, and it must
+    # carry the resolved preference — see the regression test below.
+    assert data["stream_path"].startswith("/audition/55/stream")
+
+
+def test_audition_reports_transcode_mode(client, monkeypatch):
+    # The client needs the mode to know its scrubber is unreliable.
+    monkeypatch.setattr(core, "audition_source",
+                        lambda cfg, key, force=True, offset=0: _source(mode="transcode"))
+    assert client.get("/audition/55").get_json()["mode"] == "transcode"
+
+
+def test_audition_plex_error(client, monkeypatch):
+    def boom(cfg, key, force=True, offset=0):
+        raise core.PlexError("gone")
+    monkeypatch.setattr(core, "audition_source", boom)
+    resp = client.get("/audition/55")
+    assert resp.status_code == 502
+    assert "error" in resp.get_json()
+
+
+def test_audition_config_error(client, monkeypatch):
+    def boom():
+        raise core.ConfigError("Missing required environment variable(s): X")
+    monkeypatch.setattr(core, "load_config", boom)
+    resp = client.get("/audition/55")
+    assert resp.status_code == 400
+
+
+class _FakeUpstream:
+    """Stands in for Plex's response to the proxy's request."""
+
+    def __init__(self, status=200, headers=None, body=b"audio-bytes"):
+        self.status_code = status
+        self.headers = headers or {"Content-Type": "audio/flac",
+                                   "Content-Length": "11",
+                                   "Accept-Ranges": "bytes"}
+        self._body = body
+        self.closed = False
+
+    def iter_content(self, size):
+        yield self._body
+
+    def close(self):
+        self.closed = True
+
+
+def _proxy(monkeypatch, upstream, seen=None):
+    monkeypatch.setattr(core, "audition_source", lambda cfg, key, force=True, offset=0: _source())
+
+    def _get(url, headers=None, stream=None, timeout=None):
+        if seen is not None:
+            seen.update(headers or {})
+        return upstream
+
+    monkeypatch.setattr(web.requests, "get", _get)
+    return upstream
+
+
+def test_audition_stream_pipes_audio_through(client, monkeypatch):
+    up = _proxy(monkeypatch, _FakeUpstream())
+    resp = client.get("/audition/55/stream")
+    assert resp.status_code == 200
+    assert resp.data == b"audio-bytes"
+    assert resp.headers["Content-Type"] == "audio/flac"
+    assert resp.headers["Accept-Ranges"] == "bytes"
+    assert up.closed          # the pipe must be closed, not just dropped
+
+
+def test_audition_stream_forwards_range_and_partial_status(client, monkeypatch):
+    # Seeking only works if Range goes up and 206/Content-Range come back.
+    seen = {}
+    _proxy(monkeypatch, _FakeUpstream(
+        status=206,
+        headers={"Content-Type": "audio/flac", "Content-Length": "1000",
+                 "Content-Range": "bytes 1000-1999/46011756",
+                 "Accept-Ranges": "bytes"}), seen=seen)
+    resp = client.get("/audition/55/stream", headers={"Range": "bytes=1000-1999"})
+    assert seen.get("Range") == "bytes=1000-1999"
+    assert resp.status_code == 206
+    assert resp.headers["Content-Range"] == "bytes 1000-1999/46011756"
+
+
+def test_audition_stream_without_range_sends_none(client, monkeypatch):
+    seen = {}
+    _proxy(monkeypatch, _FakeUpstream(), seen=seen)
+    client.get("/audition/55/stream")
+    assert "Range" not in seen
+
+
+def test_audition_stream_upstream_failure_is_a_bare_502(client, monkeypatch):
+    # An <audio> element can do nothing with an HTML error page.
+    monkeypatch.setattr(core, "audition_source", lambda cfg, key, force=True, offset=0: _source())
+
+    def _boom(url, headers=None, stream=None, timeout=None):
+        raise web.requests.exceptions.ConnectionError("no route")
+
+    monkeypatch.setattr(web.requests, "get", _boom)
+    resp = client.get("/audition/55/stream")
+    assert resp.status_code == 502
+    assert resp.data == b""
+
+
+def test_audition_stream_plex_error_is_a_bare_502(client, monkeypatch):
+    def boom(cfg, key, force=True, offset=0):
+        raise core.PlexError("gone")
+    monkeypatch.setattr(core, "audition_source", boom)
+    resp = client.get("/audition/55/stream")
+    assert resp.status_code == 502
+    assert resp.data == b""
+
+
+def test_plex_baseurl_is_exposed_for_the_probe(client, monkeypatch):
+    # The client can't probe reachability without knowing where Plex is.
+    with app.test_request_context("/"):
+        assert web._inject_plex_baseurl()["plex_baseurl"] == "http://x"
+
+
+def test_plex_baseurl_injection_survives_a_broken_config(monkeypatch):
+    def boom():
+        raise core.ConfigError("Missing required environment variable(s): X")
+    monkeypatch.setattr(core, "load_config", boom)
+    with app.test_request_context("/"):
+        assert web._inject_plex_baseurl()["plex_baseurl"] == ""
+
+
+class _DyingUpstream(_FakeUpstream):
+    """Plex hanging up after the response has started."""
+
+    def iter_content(self, size):
+        yield b"first-chunk"
+        raise web.requests.exceptions.ConnectionError("upstream died")
+
+
+def test_audition_stream_upstream_dying_midway_ends_cleanly(client, monkeypatch):
+    # Headers are already sent by then, so there is no status left to change;
+    # the stream must just stop instead of raising out of the worker.
+    up = _proxy(monkeypatch, _DyingUpstream())
+    resp = client.get("/audition/55/stream")
+    assert resp.status_code == 200
+    assert resp.data == b"first-chunk"
+    assert up.closed
+
+
+# --- audition quality preference and seeking (ADR-0004) ----------------------
+
+def _capture(monkeypatch):
+    """Record the (force_transcode, offset) core is called with."""
+    seen = {}
+
+    def _src(cfg, key, force=True, offset=0):
+        seen["force"], seen["offset"] = force, offset
+        return _source()
+
+    monkeypatch.setattr(core, "audition_source", _src)
+    return seen
+
+
+def test_audition_defaults_to_the_configured_preference(client, monkeypatch):
+    seen = _capture(monkeypatch)
+    client.get("/audition/55")
+    assert seen["force"] is True          # fixture config has it on
+
+
+def test_audition_client_can_turn_transcoding_off(client, monkeypatch):
+    # The setting lives in the browser, so the client sends it every time.
+    seen = _capture(monkeypatch)
+    client.get("/audition/55?transcode=0")
+    assert seen["force"] is False
+
+
+def test_audition_client_can_turn_transcoding_on(client, monkeypatch):
+    seen = _capture(monkeypatch)
+    client.get("/audition/55?transcode=1")
+    assert seen["force"] is True
+
+
+def test_audition_stream_forwards_seek_offset(client, monkeypatch):
+    # A transcode has no byte ranges, so seeking forward restarts it here.
+    seen = _capture(monkeypatch)
+    monkeypatch.setattr(web.requests, "get",
+                        lambda url, headers=None, stream=None, timeout=None:
+                        _FakeUpstream())
+    client.get("/audition/55/stream?offset=180&transcode=1")
+    assert seen["offset"] == 180
+
+
+def test_audition_rejects_a_nonsense_offset(client, monkeypatch):
+    seen = _capture(monkeypatch)
+    client.get("/audition/55?offset=banana")
+    assert seen["offset"] == 0
+
+
+def test_audition_clamps_a_negative_offset(client, monkeypatch):
+    seen = _capture(monkeypatch)
+    client.get("/audition/55?offset=-30")
+    assert seen["offset"] == 0
+
+
+def test_transcode_default_is_exposed_to_templates(client):
+    with app.test_request_context("/"):
+        assert web._inject_plex_baseurl()["audition_transcode_default"] is True
+
+
+def test_settings_gear_renders_in_the_navbar(client):
+    body = client.get("/").data.decode()
+    assert "data-setting-transcode" in body
+    assert 'aria-label="Settings"' in body
+
+
+def test_stream_path_carries_the_resolved_preference(client, monkeypatch):
+    # Regression: without this the stream route re-resolves from the server
+    # default and can serve a transcode while the JSON advertised
+    # mode="direct". The client then seeks it by byte range — which a transcode
+    # ignores — and plays start-of-track audio at the position asked for.
+    monkeypatch.setattr(core, "audition_source",
+                        lambda cfg, key, force=True, offset=0: _source())
+    off = client.get("/audition/55?transcode=0").get_json()["stream_path"]
+    on = client.get("/audition/55?transcode=1").get_json()["stream_path"]
+    assert "transcode=0" in off
+    assert "transcode=1" in on
+
+
+def test_stream_path_preference_survives_the_round_trip(client, monkeypatch):
+    # Following the advertised stream_path must reach core with the same
+    # preference the JSON was computed with.
+    seen = {}
+
+    def _src(cfg, key, force=True, offset=0):
+        seen["force"] = force
+        return _source()
+
+    monkeypatch.setattr(core, "audition_source", _src)
+    path = client.get("/audition/55?transcode=0").get_json()["stream_path"]
+    monkeypatch.setattr(web.requests, "get",
+                        lambda url, headers=None, stream=None, timeout=None:
+                        _FakeUpstream())
+    client.get(path)
+    assert seen["force"] is False

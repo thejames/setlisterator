@@ -53,6 +53,7 @@ import time
 from collections import namedtuple
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlencode
 
 import requests
 
@@ -96,6 +97,26 @@ class PlexError(Exception):
     """Connecting to Plex, finding the library, or creating a playlist failed."""
 
 
+# Whether auditions transcode by default (see the auditioning section below).
+# Lives here, beside its consumer, so the env fallback and the value handed to
+# templates cannot drift apart.
+AUDITION_TRANSCODE_DEFAULT = True
+
+
+def truthy(raw):
+    """Is this string a yes? Single source for flags from env and query alike,
+    so an env var and a URL parameter can't disagree about what 'on' means."""
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_flag(name, default):
+    """Read a boolean environment variable, falling back when it isn't set."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return truthy(raw)
+
+
 def load_config():
     """Read configuration from the environment (and a .env file).
 
@@ -108,6 +129,11 @@ def load_config():
         "plex_baseurl": os.environ.get("PLEX_BASEURL"),
         "plex_token": os.environ.get("PLEX_TOKEN"),
         "music_library": os.environ.get("PLEX_MUSIC_LIBRARY", "Music"),
+        # Default for the audition quality preference; the UI can override it
+        # per browser. On by default: auditions are for identifying a song, and
+        # capped MP3 costs a quarter of the bytes of the average FLAC here.
+        "audition_always_transcode": _env_flag(
+            "AUDITION_ALWAYS_TRANSCODE", AUDITION_TRANSCODE_DEFAULT),
     }
     missing = [name for name, key in (
         ("SETLISTFM_API_KEY", "api_key"),
@@ -1629,6 +1655,110 @@ def get_album_tracks(config, rating_key):
         "album": _track_album(t),
         "rating": getattr(t, "userRating", None),
     } for t in tracks]
+
+
+# --- auditioning ------------------------------------------------------------
+# Auditioning is listening to a candidate track before selecting it (see
+# CONTEXT.md). It plays to the browser, not to a Plex client, and is
+# best-effort: a failure here never touches a selection. Delivery — direct vs
+# proxied, direct vs transcoded — is ADR-0004.
+
+# Codecs a browser decodes natively, so the original file can be streamed as-is
+# and the scrubber works off a real Content-Length. Anything else is transcoded
+# for compatibility only, never to save bandwidth. ALAC is the case that makes
+# this branch load-bearing rather than theoretical.
+AUDITION_DIRECT_CODECS = frozenset({"mp3", "aac", "flac", "opus", "vorbis", "pcm"})
+
+# Transcode ceiling. Quality is not the point of an audition; playing at all is.
+AUDITION_MAX_BITRATE = 256
+
+
+def audition_mode(codec, force_transcode=False):
+    """'direct' if a browser can decode `codec` as-is, else 'transcode'.
+
+    `force_transcode` is the quality preference — on, every track transcodes
+    regardless of codec, which is what makes an audition cheap over a remote
+    link (a capped MP3 is roughly a quarter of the bytes of the average FLAC
+    here). Compatibility still overrides preference in the other direction:
+    turning it off never makes an undecodable codec play directly.
+
+    Unknown or missing codecs transcode. That is the safe direction: a
+    transcode that wasn't needed still plays, whereas a direct stream the
+    browser can't decode is indistinguishable from silence.
+    """
+    if force_transcode or not codec:
+        return "transcode"
+    return "direct" if str(codec).strip().lower() in AUDITION_DIRECT_CODECS \
+        else "transcode"
+
+
+def audition_source(config, rating_key, force_transcode=False, offset=0):
+    """Everything needed to audition one track.
+
+    Returns ``{mode, rating_key, direct_url, duration, title, artist, album}``.
+    ``mode`` is from `audition_mode`; ``duration`` is milliseconds (or None).
+
+    ``direct_url`` is tokenized and points straight at Plex. Whether the client
+    uses it or asks the app to proxy the same track instead is the *client's*
+    call, since only the browser knows what it can reach (ADR-0004) — so the
+    proxy URL is composed by the web layer, which owns its own routes, not
+    here. Raises PlexError.
+    """
+    try:
+        plex = connect_plex(config["plex_baseurl"], config["plex_token"])
+    except (PermissionError, ConnectionError) as exc:
+        raise PlexError(str(exc)) from exc
+    try:
+        key = int(rating_key)
+        track = plex.fetchItem(key)
+        media = (getattr(track, "media", None) or [None])[0]
+        if media is None:
+            raise ValueError("track has no media")
+        mode = audition_mode(getattr(media, "audioCodec", None), force_transcode)
+        direct_url = _audition_direct_url(plex, track, media, mode, offset)
+    except Exception as exc:
+        raise PlexError(f"Could not load track: {exc}") from exc
+    return {
+        "mode": mode,
+        "rating_key": key,
+        "direct_url": direct_url,
+        "duration": getattr(track, "duration", None),
+        "title": getattr(track, "title", "") or "",
+        "artist": _track_artist_name(track),
+        "album": _track_album(track),
+    }
+
+
+def _audition_direct_url(plex, track, media, mode, offset=0):
+    """The Plex URL an audition reads from, tokenized.
+
+    Direct mode serves the original file part, which supports HTTP Range — that
+    is what makes the scrubber accurate, and why `offset` is meaningless there
+    (the client seeks by byte range instead).
+
+    Transcode mode asks Plex for capped MP3, which serves no byte ranges at
+    all: a Range request comes back 200 from the top of the file. `offset` is
+    how you seek such a stream — Plex begins encoding at that many seconds in,
+    so the client restarts the stream to move forward. Verified against the
+    live server: offset=180 on a 369s track returns ~195s of audio.
+    """
+    if mode == "direct":
+        part = (getattr(media, "parts", None) or [None])[0]
+        if part is None or not getattr(part, "key", None):
+            raise ValueError("track has no playable file part")
+        return plex.url(part.key, includeToken=True)
+    params = urlencode({
+        "path": track.key,
+        "mediaIndex": 0,
+        "partIndex": 0,
+        "protocol": "http",
+        "offset": max(0, int(offset or 0)),
+        "copyts": 0,
+        "maxAudioBitrate": AUDITION_MAX_BITRATE,
+        "X-Plex-Platform": "Chrome",
+    })
+    return plex.url(f"/music/:/transcode/universal/start.mp3?{params}",
+                    includeToken=True)
 
 
 def set_playlist(config, rating_key, name, rating_keys, poster_path=None):

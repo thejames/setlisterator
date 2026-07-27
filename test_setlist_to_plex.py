@@ -1815,3 +1815,166 @@ def test_record_history_keeps_songs_map_when_meta_omits_it(monkeypatch, tmp_path
     m._record_history("Name", 999, 1, {"id": "abc", "artist": "Phish"})
 
     assert m.load_history(hist)["abc"]["songs"] == [_song(1, "A", "", 10)]
+
+
+# --- auditioning -------------------------------------------------------------
+
+@pytest.mark.parametrize("codec", ["mp3", "aac", "flac", "opus", "vorbis", "pcm",
+                                   "MP3", " FLAC "])
+def test_audition_mode_direct_for_browser_codecs(codec):
+    assert m.audition_mode(codec) == "direct"
+
+
+@pytest.mark.parametrize("codec", ["alac", "wma", "ape", "dsf", "wavpack"])
+def test_audition_mode_transcodes_what_browsers_reject(codec):
+    assert m.audition_mode(codec) == "transcode"
+
+
+@pytest.mark.parametrize("codec", [None, "", "   "])
+def test_audition_mode_unknown_codec_transcodes(codec):
+    # Fail safe: a needless transcode still plays; an undecodable direct
+    # stream is indistinguishable from silence.
+    assert m.audition_mode(codec) == "transcode"
+
+
+class _FakePart:
+    def __init__(self, key="/library/parts/1/2/file.flac"):
+        self.key = key
+
+
+class _FakeMedia:
+    def __init__(self, codec="flac", parts=None):
+        self.audioCodec = codec
+        self.parts = [_FakePart()] if parts is None else parts
+
+
+class _FakeAuditionTrack:
+    key = "/library/metadata/55"
+    title = "Tweezer"
+    grandparentTitle = "Phish"
+    parentTitle = "A Live One"
+    duration = 615000
+
+    def __init__(self, codec="flac", parts=None):
+        self.media = [_FakeMedia(codec, parts)]
+
+
+class _FakeAuditionPlex:
+    def __init__(self, track):
+        self._track = track
+
+    def fetchItem(self, key):
+        return self._track
+
+    def url(self, path, includeToken=False):
+        return "http://plex.test:32400" + path + ("?tok" if includeToken else "")
+
+
+def _audition(monkeypatch, track):
+    monkeypatch.setattr(m, "connect_plex",
+                        lambda u, t: _FakeAuditionPlex(track))
+    return m.audition_source(_CONFIG, "55")
+
+
+def test_audition_source_direct_serves_the_original_part(monkeypatch):
+    got = _audition(monkeypatch, _FakeAuditionTrack("flac"))
+    assert got["mode"] == "direct"
+    assert "/library/parts/1/2/file.flac" in got["direct_url"]
+    assert got["duration"] == 615000
+    assert got["title"] == "Tweezer" and got["artist"] == "Phish"
+    assert got["album"] == "A Live One"
+
+
+def test_audition_source_transcodes_alac(monkeypatch):
+    got = _audition(monkeypatch, _FakeAuditionTrack("alac"))
+    assert got["mode"] == "transcode"
+    assert "/music/:/transcode/universal/start.mp3" in got["direct_url"]
+    assert f"maxAudioBitrate={m.AUDITION_MAX_BITRATE}" in got["direct_url"]
+    assert "path=%2Flibrary%2Fmetadata%2F55" in got["direct_url"]
+
+
+def test_audition_source_offers_a_direct_url_in_either_mode(monkeypatch):
+    # The client picks direct-vs-proxy from its own reachability probe, so a
+    # direct URL comes back regardless of mode (ADR-0004). The proxy URL is the
+    # web layer's to compose — core stays free of Flask routes.
+    for codec in ("flac", "alac"):
+        got = _audition(monkeypatch, _FakeAuditionTrack(codec))
+        assert got["direct_url"]
+        assert got["rating_key"] == 55
+        assert "stream_path" not in got
+
+
+def test_audition_source_direct_without_a_file_part_raises(monkeypatch):
+    with pytest.raises(m.PlexError):
+        _audition(monkeypatch, _FakeAuditionTrack("flac", parts=[]))
+
+
+def test_audition_source_track_without_media_raises(monkeypatch):
+    track = _FakeAuditionTrack("flac")
+    track.media = []
+    with pytest.raises(m.PlexError):
+        _audition(monkeypatch, track)
+
+
+def test_audition_source_unreachable_plex_raises_plexerror(monkeypatch):
+    def _boom(u, t):
+        raise ConnectionError("Could not reach Plex")
+
+    monkeypatch.setattr(m, "connect_plex", _boom)
+    with pytest.raises(m.PlexError):
+        m.audition_source(_CONFIG, "55")
+
+
+@pytest.mark.parametrize("codec", ["mp3", "flac", "aac", "alac", None])
+def test_audition_mode_forced_always_transcodes(codec):
+    # The quality preference overrides codec compatibility in one direction.
+    assert m.audition_mode(codec, force_transcode=True) == "transcode"
+
+
+def test_audition_mode_unforced_still_transcodes_what_browsers_reject():
+    # ...but never the other way: turning the preference off cannot make an
+    # undecodable codec play directly.
+    assert m.audition_mode("alac", force_transcode=False) == "transcode"
+    assert m.audition_mode("flac", force_transcode=False) == "direct"
+
+
+def test_audition_source_forced_transcode_on_a_browser_codec(monkeypatch):
+    monkeypatch.setattr(m, "connect_plex",
+                        lambda u, t: _FakeAuditionPlex(_FakeAuditionTrack("flac")))
+    got = m.audition_source(_CONFIG, "55", force_transcode=True)
+    assert got["mode"] == "transcode"
+    assert "/music/:/transcode/universal/start.mp3" in got["direct_url"]
+
+
+def test_audition_source_offset_lands_in_the_transcode_url(monkeypatch):
+    monkeypatch.setattr(m, "connect_plex",
+                        lambda u, t: _FakeAuditionPlex(_FakeAuditionTrack("alac")))
+    assert "offset=180" in m.audition_source(_CONFIG, "55", offset=180)["direct_url"]
+
+
+def test_audition_source_offset_is_clamped_and_integral(monkeypatch):
+    monkeypatch.setattr(m, "connect_plex",
+                        lambda u, t: _FakeAuditionPlex(_FakeAuditionTrack("alac")))
+    assert "offset=0" in m.audition_source(_CONFIG, "55", offset=-5)["direct_url"]
+    assert "offset=12" in m.audition_source(_CONFIG, "55", offset=12.9)["direct_url"]
+
+
+def test_audition_source_direct_ignores_offset(monkeypatch):
+    # A direct file seeks by byte range; there is no offset to apply.
+    monkeypatch.setattr(m, "connect_plex",
+                        lambda u, t: _FakeAuditionPlex(_FakeAuditionTrack("flac")))
+    got = m.audition_source(_CONFIG, "55", offset=90)
+    assert got["mode"] == "direct"
+    assert "offset" not in got["direct_url"]
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("1", True), ("true", True), ("YES", True), ("on", True),
+    ("0", False), ("false", False), ("no", False), ("", None), (None, None)])
+def test_env_flag_parsing(monkeypatch, raw, want):
+    if raw is None:
+        monkeypatch.delenv("AUDITION_ALWAYS_TRANSCODE", raising=False)
+    else:
+        monkeypatch.setenv("AUDITION_ALWAYS_TRANSCODE", raw)
+    got = m._env_flag("AUDITION_ALWAYS_TRANSCODE", "fallback")
+    assert got == ("fallback" if want is None else want)

@@ -52,6 +52,7 @@
     opts = opts || {};
     const query = scope.querySelector(".q").value.trim();
     const results = scope.querySelector(".results");
+    stopAuditionIn(results);
     results.textContent = "";
     if (!query) return;
     results.textContent = "searching…";
@@ -66,6 +67,7 @@
     if (!data.results || !data.results.length) {
       results.textContent = "no matches in your library"; return;
     }
+    stopAuditionIn(results);
     results.textContent = "";
     data.results.forEach(function (t) {
       if (t.rating_key == null) return;
@@ -75,6 +77,17 @@
       b.type = "button";
       const st = stars(t.rating);
       if (st) b.appendChild(el("span", "result-stars", st));
+      // Audition a hit before committing to it. A span, not a button — this
+      // sits inside the result button — and it stops the click there so
+      // listening never counts as picking.
+      const aud = el("span", "aud", "▶");
+      aud.title = "Audition this track";
+      aud.addEventListener("click", function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        mountAudition(b, t.rating_key, false, null);
+      });
+      b.appendChild(aud);
       b.addEventListener("click", function () { onPick(t, label); });
       results.appendChild(b);
     });
@@ -116,12 +129,22 @@
             tb.type = "button";
             const st = stars(tr.rating);
             if (st) tb.appendChild(el("span", "result-stars", st));
+            // Same as a plain search hit: hear it before you pick it.
+            const tAud = el("span", "aud", "▶");
+            tAud.title = "Audition this track";
+            tAud.addEventListener("click", function (e) {
+              e.stopPropagation();
+              e.preventDefault();
+              mountAudition(tb, tr.rating_key, false, null);
+            });
+            tb.appendChild(tAud);
             tb.addEventListener("click", function () { onPick(tr, tr.title); });
             sub.appendChild(tb);
           });
           if (!sub.children.length) sub.textContent = "no tracks in this album";
         } catch (e) { sub.textContent = "couldn't load album"; loaded = false; }
       }
+      if (!sub.hidden) stopAuditionIn(sub);      // collapsing hides the player
       sub.hidden = !sub.hidden;
       toggle.textContent = sub.hidden ? "▸" : "▾";
       toggle.setAttribute("aria-expanded", String(!sub.hidden));
@@ -141,6 +164,7 @@
     inc.checked = true; inc.disabled = false; inc.hidden = false;
     card.querySelector(".chosen").textContent = "✓ " + label;
     card.querySelector(".searcher").hidden = true;
+    stopAuditionIn(card);
     card.querySelector(".results").textContent = "";
     card.classList.remove("skipped");
     markTouched(card.dataset.pos);
@@ -150,6 +174,7 @@
   function applyPick(pos, track, label) {
     const row = document.querySelector('tr[data-rownum="' + pos + '"]');
     if (!row) return;
+    stopAudition();          // the row no longer points at what's playing
     markTouched(pos);
     const pick = row.querySelector('[name="pick_' + pos + '"]');
     if (pick) { pick.value = track.rating_key; pick.disabled = false; }
@@ -168,6 +193,14 @@
         opt.dataset.key = track.rating_key;
         opt.dataset.title = title;
         opt.dataset.sub = sub;
+        const optAud = el("span", "aud", "▶");
+        optAud.dataset.audKey = track.rating_key;
+        optAud.title = "Audition this version";
+        optAud.addEventListener("click", function (e) {
+          e.stopPropagation(); e.preventDefault();
+          mountAudition(row, track.rating_key, true, null);
+        });
+        opt.appendChild(optAud);
         opt.appendChild(el("span", "dd-title trunc", title));
         opt.appendChild(el("span", "dd-sub trunc", sub));
         opt.addEventListener("click", function () { selectDdOpt(opt); });
@@ -263,10 +296,21 @@
     updateCount();
   }
   function wireFuzzyCard(card) {
+    // Hear the proposed track before accepting it into the setlist — the whole
+    // question a fuzzy card asks. The track is whatever the row currently
+    // picks, so there is no key to carry on the card itself.
+    const p = card.querySelector("[data-aud-fuzzy]");
+    if (p) p.addEventListener("click", function () {
+      if (p.classList.contains("playing")) { stopAudition(); return; }
+      const row = document.querySelector(
+        'tr[data-rownum="' + p.dataset.audFuzzy + '"]');
+      const key = row && rowPick(row);
+      if (key) mountAudition(card, key, false, p);
+    });
     const a = card.querySelector("[data-accept]");
     const r = card.querySelector("[data-reject]");
-    if (a) a.addEventListener("click", function () { onAccept(a); });
-    if (r) r.addEventListener("click", function () { onReject(r); });
+    if (a) a.addEventListener("click", function () { stopAudition(); onAccept(a); });
+    if (r) r.addEventListener("click", function () { stopAudition(); onReject(r); });
   }
   // The candidate sub-line shared by the dropdown and the fuzzy card (mirrors
   // the Jinja form in preview.html): "Album · tier/source".
@@ -288,6 +332,10 @@
     right.appendChild(el("div", "sub trunc", candSub(song)));
     const btns = el("div");
     btns.style.cssText = "display:flex;gap:8px;justify-content:flex-end";
+    const aud = el("button", "aud-btn", "▶");
+    aud.type = "button"; aud.dataset.audFuzzy = song.position;
+    aud.title = "Audition this match"; aud.setAttribute("aria-label", "Audition");
+    btns.appendChild(aud);
     const acc = el("button", "btn-sm btn-amber", "Accept");
     acc.type = "button"; acc.dataset.accept = song.position;
     const rej = el("button", "btn-sm", "Reject");
@@ -438,6 +486,276 @@
     }
   }
 
+  // --- auditioning (ADR-0004) ----------------------------------------------
+  // Listening to a candidate before selecting it. Deliberately never calls
+  // markTouched(): auditioning is not a touch, so a row auditioned but not
+  // chosen still re-matches on the next preferred-album switch. Do not "fix"
+  // that by marking the row — it would silently freeze rows the user only
+  // listened to.
+  //
+  // There is exactly one player at a time; it is created next to whatever is
+  // being auditioned and destroyed when anything invalidates it. Stopping
+  // clears the element's src and calls load(), which is what actually closes
+  // the connection — pausing alone leaves the socket open, and on the proxy
+  // path that holds one of the server's four threads.
+
+  const PLEX_BASE = document.body.dataset.plexBase || "";
+  let auditionEl = null;      // the roaming host node (tr or div)
+  let auditionAudio = null;
+
+  // Reachability is a property of the browser's network, not the server's, so
+  // only the browser can answer it — cached per tab because the answer can't
+  // change without a reload. ?audition=direct|proxy forces either path, which
+  // is the only way to exercise the one the probe didn't pick.
+  async function canReachPlex() {
+    // The override sticks for the tab: the pages worth testing are reached by
+    // POST (/preview, /create), where a query string can't follow. ?audition=
+    // auto clears it again.
+    let forced = new URLSearchParams(location.search).get("audition");
+    if (forced) sessionStorage.setItem("auditionForce", forced);
+    else forced = sessionStorage.getItem("auditionForce");
+    if (forced === "auto") sessionStorage.removeItem("auditionForce");
+    if (forced === "direct") return true;
+    if (forced === "proxy") return false;
+    const cached = sessionStorage.getItem("auditionDirect");
+    if (cached !== null) return cached === "1";
+    let ok = false;
+    if (PLEX_BASE) {
+      try {
+        // no-cors: we only need "did the connection succeed", not the body.
+        // 4s, not 2: a Tailscale-routed LAN measured 1.16s for this request, so
+        // a tighter budget would misreport a working direct path as unreachable.
+        // The cost of a longer wait is absorbed because this runs at page load.
+        await fetch(PLEX_BASE + "/identity",
+                    { mode: "no-cors", signal: AbortSignal.timeout(4000) });
+        ok = true;
+      } catch (err) { ok = false; }
+    }
+    sessionStorage.setItem("auditionDirect", ok ? "1" : "0");
+    return ok;
+  }
+
+  // The audition quality setting (gear menu). Stored per browser, so the
+  // server's configured default only applies until you touch the toggle.
+  function transcodePref() {
+    const saved = localStorage.getItem("auditionTranscode");
+    if (saved !== null) return saved === "1";
+    return document.body.dataset.transcodeDefault !== "0";
+  }
+  function setTranscodePref(on) {
+    localStorage.setItem("auditionTranscode", on ? "1" : "0");
+  }
+
+  function clockText(secs) {
+    if (!isFinite(secs) || secs < 0) return "–:––";
+    const m = Math.floor(secs / 60);
+    return m + ":" + String(Math.floor(secs % 60)).padStart(2, "0");
+  }
+
+  function stopAudition() {
+    if (auditionAudio) {
+      auditionAudio.pause();
+      auditionAudio.removeAttribute("src");
+      auditionAudio.load();                 // closes the connection
+      auditionAudio = null;
+    }
+    if (auditionEl) { auditionEl.remove(); auditionEl = null; }
+    document.querySelectorAll(".aud-btn.playing").forEach(function (b) {
+      b.classList.remove("playing");
+    });
+  }
+
+  // Stop only if the player is the one attached to `host`. Lets a caller tear
+  // down its own row without silencing an audition running elsewhere.
+  function stopAuditionFor(host) {
+    if (auditionEl && host && host.nextElementSibling === auditionEl) stopAudition();
+  }
+
+  // Stop if the player lives inside `container`. Search results mount the
+  // player among themselves, and emptying or hiding the list would otherwise
+  // detach it while the audio plays on — no controls, and on the proxy path a
+  // server thread held open.
+  function stopAuditionIn(container) {
+    if (auditionEl && container && container.contains(auditionEl)) stopAudition();
+  }
+
+  // `after` is the node to open beneath; `asRow` wraps in a <tr> for the
+  // preview table, otherwise a plain div (search results).
+  async function mountAudition(after, ratingKey, asRow, trigger) {
+    stopAudition();
+
+    const box = el("div", "audition");
+    const play = el("button", "play", "▶"); play.type = "button";
+    play.disabled = true;
+    const seek = document.createElement("input");
+    seek.type = "range"; seek.className = "seek";
+    seek.min = 0; seek.max = 1; seek.step = 0.1; seek.value = 0;
+    seek.disabled = true;
+    const time = el("span", "time", "0:00 / –:––");
+    const what = el("span", "what", "loading…");
+    const note = el("span", "note", "");
+    box.append(play, seek, time, what, note, el("span", "esc", "ESC to stop"));
+
+    let host;
+    if (asRow) {
+      host = document.createElement("tr");
+      host.className = "auditionrow";
+      const td = document.createElement("td");
+      // Span whatever the host row spans — the preview table and the picker
+      // have different column counts, and neither should have to say so.
+      td.colSpan = after.children.length || 1;
+      td.appendChild(box);
+      host.appendChild(td);
+    } else {
+      host = el("div", "auditionbox");
+      host.appendChild(box);
+    }
+    after.parentNode.insertBefore(host, after.nextSibling);
+    auditionEl = host;
+    if (trigger) trigger.classList.add("playing");
+
+    // Pinned for the life of this audition: re-reading it on a seek would let
+    // a mid-playback toggle change the stream's mode while the offset
+    // arithmetic still assumed the old one.
+    const pref = transcodePref();
+    let data;
+    try {
+      const resp = await fetch("/audition/" + encodeURIComponent(ratingKey) +
+                               "?transcode=" + (pref ? "1" : "0"));
+      data = await resp.json();
+      if (!resp.ok || data.error) throw new Error(data.error || "unavailable");
+    } catch (err) {
+      if (auditionEl !== host) return;      // superseded while loading
+      what.textContent = "can't audition this track";
+      note.textContent = String(err.message || err);
+      note.classList.add("warn");
+      return;
+    }
+    const direct = await canReachPlex();
+    if (auditionEl !== host) return;
+
+    const audio = new Audio();
+    audio.preload = "auto";
+    audio.src = direct ? data.direct_url : data.stream_path;
+    auditionAudio = audio;
+
+    what.textContent = (data.artist ? data.artist + " — " : "") + data.title;
+    // Surfaced deliberately: which path is in use and whether the scrubber can
+    // be trusted. A transcode is chunked with no byte ranges, so it cannot be
+    // seeked at all — saying so beats a seek bar that silently does nothing.
+    const transcoded = data.mode === "transcode";
+    const deliveryNote = (direct ? "direct" : "proxied") +
+      (transcoded ? " · 256k" : "");
+    note.textContent = deliveryNote;
+
+    // Plex knows the real duration even when the stream won't declare one.
+    const known = data.duration ? data.duration / 1000 : NaN;
+
+    // Where in the track this stream begins. Always 0 for direct audio, which
+    // seeks natively by byte range. For a transcode there are no byte ranges,
+    // so seeking forward means restarting the stream at a new offset — and
+    // then element time is relative to it.
+    let baseOffset = 0;
+    let seeking = false;
+
+    function total() {
+      return isFinite(audio.duration) && audio.duration > 0 && !transcoded
+        ? audio.duration : known;
+    }
+    function position() { return baseOffset + audio.currentTime; }
+
+    // Whether `t` (absolute) is already downloaded, and so free to jump to.
+    // Chrome keeps everything behind the playhead but only ~2.4s ahead, so in
+    // practice this is true for every backward seek and false for a jump
+    // forward — which is exactly the split we want.
+    function isBuffered(t) {
+      const rel = t - baseOffset;
+      for (let i = 0; i < audio.buffered.length; i++) {
+        if (rel >= audio.buffered.start(i) && rel <= audio.buffered.end(i)) return true;
+      }
+      return false;
+    }
+
+    function paint() {
+      if (seeking) return;                  // don't fight the user's drag
+      const dur = total();
+      time.textContent = clockText(position()) + " / " + clockText(dur);
+      if (isFinite(dur) && dur > 0) {
+        seek.max = dur;
+        seek.value = position();
+        seek.disabled = false;
+      }
+    }
+
+    // Restart a transcode at `t` seconds in. Costs a new Plex transcode
+    // session and about a second of rebuffer, so it is the fallback, not the
+    // mechanism — buffered seeks never come through here.
+    async function restartAt(t) {
+      const url = new URL(audio.src, location.origin);
+      url.searchParams.set("offset", Math.floor(t));
+      // Only our own route takes the preference; a direct Plex URL already
+      // encodes the choice in which endpoint it points at.
+      if (url.origin === location.origin) {
+        url.searchParams.set("transcode", pref ? "1" : "0");
+      }
+      baseOffset = t;
+      const wasPlaying = !audio.paused;
+      audio.src = url.toString();
+      // Signal with a class, not with text: the labels are flex: none, so any
+      // extra word rewraps the whole control while you are looking at it.
+      box.classList.add("seeking");
+      try { if (wasPlaying) await audio.play(); } catch (err) { /* ignore */ }
+      box.classList.remove("seeking");
+      paint();
+    }
+
+    audio.addEventListener("loadedmetadata", paint);
+    audio.addEventListener("timeupdate", paint);
+    audio.addEventListener("ended", function () {
+      play.textContent = "▶";
+      if (trigger) trigger.classList.remove("playing");
+    });
+    audio.addEventListener("error", function () {
+      what.textContent = "playback failed";
+      note.textContent = direct
+        ? "couldn't reach Plex from the browser" : "stream error";
+      note.classList.add("warn");
+      play.disabled = true;
+    });
+    // Dragging updates the readout only; the seek itself waits for release,
+    // so scrubbing across a transcode doesn't spawn a Plex session per pixel.
+    seek.addEventListener("input", function () {
+      seeking = true;
+      time.textContent = clockText(Number(seek.value)) + " / " + clockText(total());
+    });
+    seek.addEventListener("change", function () {
+      seeking = false;
+      const t = Number(seek.value);
+      if (!transcoded || isBuffered(t)) {
+        audio.currentTime = t - baseOffset;  // free: bytes are already here
+        paint();
+      } else {
+        restartAt(t);                        // forward past the buffer
+      }
+    });
+    play.addEventListener("click", function () {
+      if (audio.paused) { audio.play(); play.textContent = "❚❚"; }
+      else { audio.pause(); play.textContent = "▶"; }
+    });
+
+    play.disabled = false;
+    play.textContent = "❚❚";
+    paint();
+    try { await audio.play(); } catch (err) { play.textContent = "▶"; }
+  }
+
+  // The row's current pick — the hidden input both single- and multi-candidate
+  // rows carry, so this always follows the selection rather than the match.
+  function rowPick(row) {
+    const inp = row.querySelector('input[type=hidden][name^="pick_"]');
+    return inp && inp.value;
+  }
+
   // --- wiring --------------------------------------------------------------
   document.querySelectorAll("form[data-loading]").forEach(function (form) {
     form.addEventListener("submit", function () {
@@ -476,7 +794,10 @@
   // No-JS users fall back to the Apply button (a full submit that resets).
   document.querySelectorAll("[data-album-select]").forEach(function (sel) {
     sel.dataset.prev = sel.value;   // last album that matched, for error revert
-    sel.addEventListener("change", function () { rematchAlbum(sel); });
+    sel.addEventListener("change", function () {
+      stopAudition();        // a re-match can rewrite the candidate playing
+      rematchAlbum(sel);
+    });
   });
 
   document.querySelectorAll("[data-poster-input]").forEach(function (input) {
@@ -535,6 +856,54 @@
   });
   document.querySelectorAll(".dd-opt").forEach(function (opt) {
     opt.addEventListener("click", function () { selectDdOpt(opt); });
+  });
+
+  // --- audition wiring -----------------------------------------------------
+  // Audition the row's currently selected track.
+  document.querySelectorAll("[data-aud-row]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      const row = btn.closest("tr[data-rownum]");
+      const key = row && rowPick(row);
+      if (!key) return;
+      if (btn.classList.contains("playing")) { stopAudition(); return; }
+      mountAudition(row, key, true, btn);
+    });
+  });
+
+  // Audition one candidate from inside an open dropdown. The listener sits on
+  // the span, so it runs before the option's own click handler and stops it
+  // there: auditioning a candidate must not select it, or merely listening
+  // would touch the row and freeze it against re-match.
+  document.querySelectorAll(".dd-opt .aud").forEach(function (spot) {
+    spot.addEventListener("click", function (e) {
+      e.stopPropagation();
+      e.preventDefault();
+      const row = spot.closest("tr[data-rownum]");
+      if (!row) return;
+      mountAudition(row, spot.dataset.audKey, true, null);
+    });
+  });
+
+  // Settings: the audition quality toggle in the gear menu. Applies to the
+  // next audition — an in-flight one is left alone rather than restarted
+  // under the user.
+  document.querySelectorAll("[data-setting-transcode]").forEach(function (cb) {
+    cb.checked = transcodePref();
+    cb.addEventListener("change", function () { setTranscodePref(cb.checked); });
+  });
+
+  // Warm the reachability verdict now rather than on the first click: an
+  // unroutable Plex takes the full abort timeout to fail, and finding that out
+  // mid-click would stall the first audition. Also the point at which an
+  // ?audition= override is captured for the tab, so it survives the POSTs to
+  // /preview and /create. Fire-and-forget — nothing waits on it.
+  canReachPlex();
+
+  // Escape stops. Not space — the preview page is full of checkboxes and
+  // inputs where space already means something, so a global binding would
+  // fight the page. The control says "ESC to stop" because nobody guesses it.
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && auditionEl) stopAudition();
   });
 
   // --- match-explanation popover (clicking the Exact/Fuzzy pill) ------------
@@ -666,15 +1035,31 @@
 
       const rmTd = el("td");
       rmTd.style.textAlign = "right";
+      // Both controls on one line; stacked, they make every row taller.
+      const actions = el("div", "trackactions");
+      // Audition a track already in the playlist — same roaming player the
+      // preview rows and search results use, mounted under this row.
+      const aud = el("button", "aud-btn", "▶");
+      aud.type = "button";
+      aud.title = "Audition this track";
+      aud.setAttribute("aria-label", "Audition");
+      aud.addEventListener("click", function () {
+        if (aud.classList.contains("playing")) { stopAudition(); return; }
+        mountAudition(tr, key, true, aud);
+      });
+      actions.appendChild(aud);
       const rm = el("button", "trackrm", "✕");
       rm.type = "button";
       rm.setAttribute("aria-label", "Remove track");
       rm.addEventListener("click", function () {
+        stopAuditionFor(tr);   // the row is going away; so is anything under it
         picked.delete(key); tr.remove(); renumber(); refresh();
       });
-      rmTd.appendChild(rm);
+      actions.appendChild(rm);
+      rmTd.appendChild(actions);
 
       tr.addEventListener("dragstart", function () {
+        stopAudition();        // reordering would strand the player mid-table
         dragEl = tr; tr.classList.add("dragging");
       });
       tr.addEventListener("dragend", function () {

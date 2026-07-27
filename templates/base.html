@@ -392,9 +392,68 @@
     .missingcard.skipped { opacity: .4; }
     .searchpill { display: flex; align-items: center; gap: 8px; min-width: 0;
       background: #101014; border: 1px solid #2A2A32; border-radius: 8px; padding: 6px 12px; }
+    /* --- auditioning (ADR-0004) --- */
+    .aud-btn {
+      background: none; border: 1px solid var(--border2); color: var(--muted);
+      border-radius: 5px; cursor: pointer; font: 500 10px/1 var(--mono);
+      padding: 5px 6px; flex: none;
+    }
+    .aud-btn:hover { color: var(--accent); border-color: var(--accent); }
+    .aud-btn.playing { color: var(--accent); border-color: var(--accent); }
+    /* Inside a dropdown option or a search result: a span, not a button —
+       these live inside a <button>, where a nested button is invalid. */
+    .aud { color: var(--dim); cursor: pointer; flex: none;
+           padding: 0 6px; font-size: 11px; }
+    .aud:hover { color: var(--accent); }
+    .auditionbox { margin: 4px 0 6px; }
+    /* Picker row actions on one line — stacked, they make every row taller.
+       Distinct from .rowactions, which is the History/Playlists row toolbar. */
+    .trackactions { display: flex; gap: 6px; align-items: center;
+                    justify-content: flex-end; }
+    /* On a fuzzy card it sits beside Accept/Reject, so match their height
+       rather than rendering as a sliver against them. */
+    .fuzzycard .aud-btn { padding: 8px 11px; font-size: 13px; }
+    .gear-btn { display: inline-flex; align-items: center; padding: 4px 6px; }
+    /* Right-anchored: it's the last item in the bar and wide enough that the
+       default left: 0 pushes it off the edge of the page. */
+    .settings-menu { min-width: 250px; padding: 4px; left: auto; right: 0; }
+    .setting { display: flex; gap: 9px; align-items: flex-start; cursor: pointer;
+               padding: 9px 10px; border-radius: 5px; }
+    .setting:hover { background: var(--panel3); }
+    .setting input { margin-top: 2px; accent-color: var(--accent); flex: none; }
+    .setting-text { display: flex; flex-direction: column; gap: 3px; }
+    .setting-text b { color: var(--text); font-weight: 600; }
+    .setting-sub { color: var(--dim); font-size: 10px; line-height: 1.45; }
+    .auditionrow > td { background: var(--panel3); padding: 8px 12px; }
+    .audition {
+      display: flex; align-items: center; gap: 10px;
+      font: 400 11px/1.4 var(--mono); color: var(--text2);
+      background: var(--panel3); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px;
+    }
+    .audition .play {
+      background: var(--accent); color: #17130A; border: 0; border-radius: 4px;
+      cursor: pointer; font: 600 11px/1 var(--mono); padding: 7px 10px;
+      flex: none; min-width: 34px;
+    }
+    .audition .seek { flex: 1; accent-color: var(--accent); min-width: 80px; }
+    .audition .seek:disabled { opacity: .45; cursor: not-allowed; }
+    .audition .time { color: var(--muted); flex: none;
+                      font-variant-numeric: tabular-nums; }
+    .audition .what { color: var(--text2); flex: none; max-width: 34%;
+                      overflow: hidden; text-overflow: ellipsis;
+                      white-space: nowrap; }
+    .audition .note { color: var(--dim); flex: none; }
+    .audition .note.warn { color: var(--accent); }
+    .audition .esc { color: var(--faint); flex: none; }
+    /* Restarting a transcode at a new offset. Opacity only — nothing may
+       change width here or the control jumps under the pointer mid-drag. */
+    .audition.seeking .seek,
+    .audition.seeking .time { opacity: .4; transition: opacity .12s; }
   </style>
 </head>
-<body>
+<body data-plex-base="{{ plex_baseurl }}"
+      data-transcode-default="{{ '1' if audition_transcode_default else '0' }}">
   <main>
     <nav class="navbar">
       <a class="brand" href="{{ url_for('index') }}">Setlist <span class="arrow">→</span> Plex</a>
@@ -419,6 +478,28 @@
         </span>
         <a href="{{ url_for('attended') }}">Attended</a>
         <a href="{{ url_for('buylist') }}">Buy list</a>
+        <span class="navdrop" data-navdrop>
+          <button type="button" class="navdrop-btn gear-btn" data-navdrop-toggle
+                  aria-expanded="false" aria-haspopup="true" aria-label="Settings"
+                  title="Settings">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
+          <div class="navdrop-menu settings-menu" hidden>
+            <label class="setting">
+              <input type="checkbox" data-setting-transcode>
+              <span class="setting-text">
+                <b>Audition in 256k</b>
+                <span class="setting-sub">Smaller and faster over a remote
+                  link. Off streams the original file.</span>
+              </span>
+            </label>
+          </div>
+        </span>
       </span>
     </nav>
     {% block content %}{% endblock %}
