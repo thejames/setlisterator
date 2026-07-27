@@ -529,6 +529,12 @@
     });
   }
 
+  // Stop only if the player is the one attached to `host`. Lets a caller tear
+  // down its own row without silencing an audition running elsewhere.
+  function stopAuditionFor(host) {
+    if (auditionEl && host && host.nextElementSibling === auditionEl) stopAudition();
+  }
+
   // `after` is the node to open beneath; `asRow` wraps in a <tr> for the
   // preview table, otherwise a plain div (search results).
   async function mountAudition(after, ratingKey, asRow, trigger) {
@@ -551,7 +557,9 @@
       host = document.createElement("tr");
       host.className = "auditionrow";
       const td = document.createElement("td");
-      td.colSpan = 5;
+      // Span whatever the host row spans — the preview table and the picker
+      // have different column counts, and neither should have to say so.
+      td.colSpan = after.children.length || 1;
       td.appendChild(box);
       host.appendChild(td);
     } else {
@@ -645,9 +653,11 @@
       baseOffset = t;
       const wasPlaying = !audio.paused;
       audio.src = url.toString();
-      note.textContent = deliveryNote + " · seeking…";
+      // Signal with a class, not with text: the labels are flex: none, so any
+      // extra word rewraps the whole control while you are looking at it.
+      box.classList.add("seeking");
       try { if (wasPlaying) await audio.play(); } catch (err) { /* ignore */ }
-      note.textContent = deliveryNote;
+      box.classList.remove("seeking");
       paint();
     }
 
@@ -977,15 +987,28 @@
 
       const rmTd = el("td");
       rmTd.style.textAlign = "right";
+      // Audition a track already in the playlist — same roaming player the
+      // preview rows and search results use, mounted under this row.
+      const aud = el("button", "aud-btn", "▶");
+      aud.type = "button";
+      aud.title = "Audition this track";
+      aud.setAttribute("aria-label", "Audition");
+      aud.addEventListener("click", function () {
+        if (aud.classList.contains("playing")) { stopAudition(); return; }
+        mountAudition(tr, key, true, aud);
+      });
+      rmTd.appendChild(aud);
       const rm = el("button", "trackrm", "✕");
       rm.type = "button";
       rm.setAttribute("aria-label", "Remove track");
       rm.addEventListener("click", function () {
+        stopAuditionFor(tr);   // the row is going away; so is anything under it
         picked.delete(key); tr.remove(); renumber(); refresh();
       });
       rmTd.appendChild(rm);
 
       tr.addEventListener("dragstart", function () {
+        stopAudition();        // reordering would strand the player mid-table
         dragEl = tr; tr.classList.add("dragging");
       });
       tr.addEventListener("dragend", function () {

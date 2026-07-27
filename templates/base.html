@@ -439,6 +439,10 @@
     .audition .note { color: var(--dim); flex: none; }
     .audition .note.warn { color: var(--accent); }
     .audition .esc { color: var(--faint); flex: none; }
+    /* Restarting a transcode at a new offset. Opacity only — nothing may
+       change width here or the control jumps under the pointer mid-drag. */
+    .audition.seeking .seek,
+    .audition.seeking .time { opacity: .4; transition: opacity .12s; }
   </style>
 </head>
 <body data-plex-base="{{ plex_baseurl }}"
