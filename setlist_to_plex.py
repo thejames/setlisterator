@@ -3,7 +3,8 @@
 
 This script fetches a setlist from setlist.fm, matches each song against your
 Plex music library, builds a playlist (in setlist order) from the tracks it
-finds, and prints a report of what it could not match so you know what to buy.
+finds, and prints a report of what it could not match, so you know what your
+library is missing.
 
 Environment variables (read from a .env file in the working directory, or the
 real environment):
@@ -1279,7 +1280,7 @@ def _playlist_summary(history_meta, member_keys):
     """Build the Plex playlist summary text from show metadata.
 
     A self-contained record: which show this is, how much of it the playlist
-    holds, the songs still worth buying (a built-in buy-list), and the
+    holds, the songs still missing from your library, and the
     setlist.fm source link. Derived — never merged into what's already there —
     so every write path can rebuild it from scratch.
 
@@ -1339,7 +1340,7 @@ def _playlist_summary(history_meta, member_keys):
     if not declined and not missing:
         lines += ["", "This is the full run of the show."]
     else:
-        # Missing leads: it's the actionable list (these are the songs to buy).
+        # Missing leads: it's the actionable list (the gaps in your library).
         if missing:
             lines += _summary_bullets(
                 f"Missing ({len(missing)}) — not in your library:", missing)

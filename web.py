@@ -148,9 +148,13 @@ def history():
     return render_template("history.html", entries=entries)
 
 
-@app.get("/buylist")
-def buylist():
-    """Aggregate every show's missing tracks into one deduped buy-list."""
+@app.get("/missing")
+def missing():
+    """Aggregate every show's missing tracks into one deduped list.
+
+    "Missing" is about your *library*, not your ownership — a gap here may be
+    a record you own on vinyl. See the glossary; the list deliberately doesn't
+    tell you to buy anything."""
     # No config needed — this only reads the local history file. Lazily enrich
     # each missing track with its likely album (MusicBrainz), caching the result
     # back into history so it's only looked up once.
@@ -184,7 +188,7 @@ def buylist():
          "tracks": sorted(by_artist[artist], key=lambda r: r["title"].lower())}
         for artist in sorted(by_artist, key=lambda a: a.lower())
     ]
-    return render_template("buylist.html", groups=groups, total=len(by_key))
+    return render_template("missing.html", groups=groups, total=len(by_key))
 
 
 @app.get("/attended")

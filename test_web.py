@@ -85,10 +85,10 @@ def test_navbar_present(client):
     body = client.get("/").data.decode()
     assert "Setlist-er-ator" in body            # brand
     assert 'href="/history"' in body            # History link
-    assert 'href="/buylist"' in body            # Buy list link
+    assert 'href="/missing"' in body            # Missing list link
 
 
-def test_buylist_aggregates_and_dedupes(client, monkeypatch):
+def test_missing_list_aggregates_and_dedupes(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {
         "a": {"missing_tracks": [
             {"artist": "Primus", "title": "Jilly's on Smack"},
@@ -100,7 +100,7 @@ def test_buylist_aggregates_and_dedupes(client, monkeypatch):
     # no MusicBrainz network, no real history writes
     monkeypatch.setattr(core, "lookup_album", lambda a, t: "Pork Soda")
     monkeypatch.setattr(core, "save_history", lambda p, h: None)
-    body = client.get("/buylist").data.decode()
+    body = client.get("/missing").data.decode()
     # deduped to one Jilly's entry; the repeated one counts as 2 shows
     assert body.count("Jilly&#39;s on Smack") == 1
     assert "2 shows" in body
@@ -112,10 +112,10 @@ def test_buylist_aggregates_and_dedupes(client, monkeypatch):
     assert "The Ol&#39; Grizz" in body
 
 
-def test_buylist_empty(client, monkeypatch):
+def test_missing_list_empty(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {})
-    body = client.get("/buylist").data.decode()
-    assert "Nothing to buy" in body
+    body = client.get("/missing").data.decode()
+    assert "Nothing missing" in body
 
 
 def test_history_lists_entries_newest_first(client, monkeypatch):
@@ -505,7 +505,7 @@ def test_create_builds_playlist(client, monkeypatch):
     assert captured["meta"]["missing_tracks"][0]["position"] == 3   # carried for summary
     body = resp.data.decode()
     assert "Primus - TD Amp (2)" in body         # final (suffixed) name shown
-    assert "Jilly&#39;s on Smack" in body        # buy-list persisted
+    assert "Jilly&#39;s on Smack" in body        # missing list persisted
 
 
 def test_create_excludes_unchecked_rows(client, monkeypatch):
@@ -1308,3 +1308,24 @@ def test_audition_wording_avoids_the_reserved_terms(client, monkeypatch):
     body = client.post("/preview", data={"setlist": "abc123"}).data.decode()
     assert "Audition" in body
     assert "playback" not in body.lower()
+
+
+def test_missing_list_avoids_purchase_framing(client, monkeypatch):
+    # CONTEXT.md: the three states describe your *library*, never your
+    # ownership — a missing song may be one you own on vinyl. The UI must not
+    # presume the gap is closed by a purchase.
+    monkeypatch.setattr(core, "load_history", lambda path: {
+        "a": {"missing_tracks": [{"artist": "Primus", "title": "The Ol' Grizz"}]}})
+    monkeypatch.setattr(core, "lookup_album", lambda a, t: "Pork Soda")
+    monkeypatch.setattr(core, "save_history", lambda p, h: None)
+    body = client.get("/missing").data.decode().lower()
+    assert "missing tracks" in body
+    for word in ("buy", "purchase", "shopping"):
+        assert word not in body
+
+
+def test_navbar_links_the_missing_list(client):
+    body = client.get("/").data.decode()
+    assert 'href="/missing"' in body
+    assert ">Missing<" in body
+    assert "buylist" not in body

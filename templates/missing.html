@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Buy list — Setlist-er-ator{% endblock %}
+{% block title %}Missing tracks — Setlist-er-ator{% endblock %}
 {% block content %}
-<h2>Buy list ({{ total }} track{{ '' if total == 1 else 's' }} ·
+<h2>Missing tracks ({{ total }} track{{ '' if total == 1 else 's' }} ·
   {{ groups|length }} artist{{ '' if groups|length == 1 else 's' }})</h2>
-<p class="hint">Every track missing across the shows you've created, deduped and
-  grouped by artist — your shopping list.</p>
+<p class="hint">Every track missing from your library across the shows you've
+  created, deduped and grouped by artist.</p>
 
 {% if groups %}
 {% for g in groups %}
@@ -27,7 +27,7 @@
 </div>
 {% endfor %}
 {% else %}
-<p>Nothing to buy — either you've matched everything, or you haven't
+<p>Nothing missing — either every song matched, or you haven't
   <a href="{{ url_for('index') }}">created any playlists</a> yet.</p>
 {% endif %}
 {% endblock %}
