@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Turns a [setlist.fm](https://www.setlist.fm/) show into a Plex music playlist, and reports which songs are missing from your Plex library so you know what to buy. Ships as a CLI (`setlist_to_plex.py`) and a small local Flask web app (`web.py`) that share the same matching pipeline. No database, no hosted component — it talks to a Plex server (usually on `localhost`) and persists a single JSON history file outside the repo.
+Turns a [setlist.fm](https://www.setlist.fm/) show into a Plex music playlist, and reports which songs are missing from your Plex library. Ships as a CLI (`setlist_to_plex.py`) and a small local Flask web app (`web.py`) that share the same matching pipeline. No database, no hosted component — it talks to a Plex server (usually on `localhost`) and persists a single JSON history file outside the repo.
 
 ## Commands
 
@@ -55,7 +55,7 @@ Titles compare via `normalize_simple` / `normalize_aggressive` across four ranke
 
 **Config** is a plain dict from `load_config()` threaded through every function (`config["plex_baseurl"]`, etc.). Plex auth is a static token (`PlexServer(baseurl, token)`) — no OAuth. setlist.fm is a header API key.
 
-**History** is a single JSON file keyed by setlist ID (default `~/.config/setlist_to_plex/history.json`, honoring `XDG_CONFIG_HOME`; override with `SETLIST_TO_PLEX_HISTORY`). It lives outside the repo. Only runs that actually create a playlist are recorded, so a show that matched nothing is retried next time. It also caches per-track album data (from setlist.fm's "Songs on Albums", MusicBrainz fallback) used by the web **Buy list**.
+**History** is a single JSON file keyed by setlist ID (default `~/.config/setlist_to_plex/history.json`, honoring `XDG_CONFIG_HOME`; override with `SETLIST_TO_PLEX_HISTORY`). It lives outside the repo. Only runs that actually create a playlist are recorded, so a show that matched nothing is retried next time. It also caches per-track album data (from setlist.fm's "Songs on Albums", MusicBrainz fallback) used by the web **Missing** list.
 
 ## Conventions
 

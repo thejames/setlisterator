@@ -34,11 +34,14 @@ The image shown as a playlist's thumbnail in Plex — optionally set from an upl
 _Avoid_: Folder image, cover, artwork, thumbnail.
 
 **Playlist summary**:
-The text the app writes to a Plex playlist's summary field: a self-contained record of how much of the show you have, which songs are still worth buying, and a link back to setlist.fm. Derived, never authored — it is rewritten from scratch whenever the playlist changes, so it is never edited in place or merged.
+The text the app writes to a Plex playlist's summary field: a self-contained record of how much of the show you have, which songs are still missing from your library, and a link back to setlist.fm. Derived, never authored — it is rewritten from scratch whenever the playlist changes, so it is never edited in place or merged.
 _Avoid_: Description, notes, blurb.
 
 **Added / Declined / Missing**:
-The three states a setlist song can be in, relative to one playlist. **Added** — its matched track is in the playlist. **Declined** — it matched a track in your library, but that track is not in the playlist. **Missing** — nothing in your library matched it, so it's a buy candidate. Every setlist song is in exactly one state, and the state is derived fresh at each write from the stored match data plus the playlist's live membership.
+The three states a setlist song can be in, relative to one playlist. **Added** — its matched track is in the playlist. **Declined** — it matched a track in your library, but that track is not in the playlist. **Missing** — nothing in your library matched it, so it's a gap to fill. Every setlist song is in exactly one state, and the state is derived fresh at each write from the stored match data plus the playlist's live membership.
 _Avoid_: Excluded (an *action* the user took on the preview screen; declined is a *state*, and also covers a track removed later in the editor or directly in Plex). Unmatched, absent, skipped.
 
-The distinction that matters: **declined means you own it, missing means you don't.** Only missing songs belong on a buy list.
+The distinction that matters: **declined means it's in your library, missing means it isn't.** Only missing songs belong on the missing list.
+
+All three states describe your *library*, never your ownership. A missing song may well be one you own on vinyl, on a CD, or in another service — the app only knows it isn't in Plex. Hence **missing**, never "to buy": what you do about a gap is your business, and buying is only one of the options.
+_Avoid_: Buy list, shopping list, wanted, to buy (all presume the gap is closed by a purchase).

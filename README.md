@@ -3,7 +3,7 @@
 [![tests](https://github.com/thejames/setlisterator/actions/workflows/tests.yml/badge.svg)](https://github.com/thejames/setlisterator/actions/workflows/tests.yml)
 
 Create a Plex music playlist from a [setlist.fm](https://www.setlist.fm/) show,
-and report which songs are missing from your library so you know what to buy.
+and report which songs are missing from your library.
 Works as a command-line tool (`setlist_to_plex.py`) or a small local
 [web app](#web-interface) (`web.py`).
 
@@ -130,7 +130,7 @@ failing.
 `--history` reads only the local history file, so it works without any Plex or
 setlist.fm configuration: `setlist_to_plex.py --history`. `--backfill` re-matches
 older shows (those recorded before per-track missing detail existed) so they
-show up in the web **Buy list**; it needs the usual config and is idempotent.
+show up in the web **Missing** list; it needs the usual config and is idempotent.
 
 ## Logging vs. report
 
@@ -227,13 +227,14 @@ created, newest first. Each row can **Re-open** the setlist in Preview, link out
 to its setlist.fm source, or **Update** the existing playlist: it re-matches the
 show against your *current* library and shows the tracks that are now available
 but not yet in the playlist, for you to confirm. Update is **add-only** — it
-tops up the existing playlist (no new copy, nothing removed), so when you buy a
-song that was missing, you can fold it into the playlist you already made. The
-**Buy list** link aggregates every show's missing tracks into one deduped list,
+tops up the existing playlist (no new copy, nothing removed), so when a song
+that was missing turns up in your library, you can fold it into the playlist
+you already made. The **Missing** link aggregates every show's missing tracks
+into one deduped list,
 grouped by artist, with the album each track is from. Albums come from
 setlist.fm's own "Songs on Albums" data (scraped from the setlist page when you
 preview a show), with [MusicBrainz](https://musicbrainz.org/) as a fallback for
-the few it doesn't map (e.g. covers) — looked up lazily on first Buy-list view
+the few it doesn't map (e.g. covers) — looked up lazily on first Missing-list view
 and cached into history. Both are best-effort and degrade gracefully offline.
 
 The **Attended** link turns your setlist.fm "I was there" history into a
