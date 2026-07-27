@@ -97,6 +97,12 @@ class PlexError(Exception):
     """Connecting to Plex, finding the library, or creating a playlist failed."""
 
 
+# Whether auditions transcode by default (see the auditioning section below).
+# Lives here, beside its consumer, so the env fallback and the value handed to
+# templates cannot drift apart.
+AUDITION_TRANSCODE_DEFAULT = True
+
+
 def truthy(raw):
     """Is this string a yes? Single source for flags from env and query alike,
     so an env var and a URL parameter can't disagree about what 'on' means."""
@@ -126,7 +132,8 @@ def load_config():
         # Default for the audition quality preference; the UI can override it
         # per browser. On by default: auditions are for identifying a song, and
         # capped MP3 costs a quarter of the bytes of the average FLAC here.
-        "audition_always_transcode": _env_flag("AUDITION_ALWAYS_TRANSCODE", True),
+        "audition_always_transcode": _env_flag(
+            "AUDITION_ALWAYS_TRANSCODE", AUDITION_TRANSCODE_DEFAULT),
     }
     missing = [name for name, key in (
         ("SETLISTFM_API_KEY", "api_key"),

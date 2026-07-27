@@ -54,7 +54,8 @@ def _inject_plex_baseurl():
         return {"plex_baseurl": config["plex_baseurl"],
                 "audition_transcode_default": config["audition_always_transcode"]}
     except Exception:
-        return {"plex_baseurl": "", "audition_transcode_default": True}
+        return {"plex_baseurl": "",
+                "audition_transcode_default": core.AUDITION_TRANSCODE_DEFAULT}
 
 
 # Poster upload: an optional browser image saved to a temp file for the core
@@ -323,8 +324,14 @@ def audition(rating_key):
         return jsonify(error=str(exc)), 400
     except core.PlexError as exc:
         return jsonify(error=str(exc)), 502
+    # Carry the resolved preference into the proxy URL. Without it the stream
+    # route would re-resolve from the server default and could serve a
+    # transcode while this response advertised `mode: "direct"` — the client
+    # would then seek it by byte range, which a transcode ignores, and play
+    # start-of-track audio at the position asked for (ADR-0004).
     src["stream_path"] = url_for("audition_stream",
-                                 rating_key=src["rating_key"])
+                                 rating_key=src["rating_key"],
+                                 transcode="1" if force else "0")
     return jsonify(**src)
 
 

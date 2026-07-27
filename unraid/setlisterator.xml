@@ -19,4 +19,5 @@
   <Config Name="PLEX_BASEURL" Target="PLEX_BASEURL" Default="http://YOUR_PLEX_IP:32400" Description="Plex server base URL, e.g. http://10.0.0.10:32400" Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="PLEX_TOKEN" Target="PLEX_TOKEN" Default="" Description="Plex X-Plex-Token" Type="Variable" Display="always" Required="true" Mask="true"/>
   <Config Name="PLEX_MUSIC_LIBRARY" Target="PLEX_MUSIC_LIBRARY" Default="Music" Description="Name of your Plex music library section" Type="Variable" Display="always" Required="false" Mask="false">Music</Config>
+  <Config Name="AUDITION_ALWAYS_TRANSCODE" Target="AUDITION_ALWAYS_TRANSCODE" Default="1" Description="Audition tracks as 256k MP3 instead of streaming the original file (1/0). Smaller and faster over a remote link; can also be toggled per browser in the app's gear menu." Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
 </Container>

@@ -1046,8 +1046,9 @@ def test_audition_returns_source_and_proxy_path(client, monkeypatch):
     assert data["mode"] == "direct"
     assert data["direct_url"].startswith("http://plex.test/")
     assert data["duration"] == 615000
-    # The proxy path is the web layer's to compose, not core's.
-    assert data["stream_path"] == "/audition/55/stream"
+    # The proxy path is the web layer's to compose, not core's, and it must
+    # carry the resolved preference — see the regression test below.
+    assert data["stream_path"].startswith("/audition/55/stream")
 
 
 def test_audition_reports_transcode_mode(client, monkeypatch):
@@ -1253,3 +1254,34 @@ def test_settings_gear_renders_in_the_navbar(client):
     body = client.get("/").data.decode()
     assert "data-setting-transcode" in body
     assert 'aria-label="Settings"' in body
+
+
+def test_stream_path_carries_the_resolved_preference(client, monkeypatch):
+    # Regression: without this the stream route re-resolves from the server
+    # default and can serve a transcode while the JSON advertised
+    # mode="direct". The client then seeks it by byte range — which a transcode
+    # ignores — and plays start-of-track audio at the position asked for.
+    monkeypatch.setattr(core, "audition_source",
+                        lambda cfg, key, force=True, offset=0: _source())
+    off = client.get("/audition/55?transcode=0").get_json()["stream_path"]
+    on = client.get("/audition/55?transcode=1").get_json()["stream_path"]
+    assert "transcode=0" in off
+    assert "transcode=1" in on
+
+
+def test_stream_path_preference_survives_the_round_trip(client, monkeypatch):
+    # Following the advertised stream_path must reach core with the same
+    # preference the JSON was computed with.
+    seen = {}
+
+    def _src(cfg, key, force=True, offset=0):
+        seen["force"] = force
+        return _source()
+
+    monkeypatch.setattr(core, "audition_source", _src)
+    path = client.get("/audition/55?transcode=0").get_json()["stream_path"]
+    monkeypatch.setattr(web.requests, "get",
+                        lambda url, headers=None, stream=None, timeout=None:
+                        _FakeUpstream())
+    client.get(path)
+    assert seen["force"] is False

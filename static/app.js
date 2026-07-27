@@ -52,6 +52,7 @@
     opts = opts || {};
     const query = scope.querySelector(".q").value.trim();
     const results = scope.querySelector(".results");
+    stopAuditionIn(results);
     results.textContent = "";
     if (!query) return;
     results.textContent = "searching…";
@@ -66,6 +67,7 @@
     if (!data.results || !data.results.length) {
       results.textContent = "no matches in your library"; return;
     }
+    stopAuditionIn(results);
     results.textContent = "";
     data.results.forEach(function (t) {
       if (t.rating_key == null) return;
@@ -142,6 +144,7 @@
           if (!sub.children.length) sub.textContent = "no tracks in this album";
         } catch (e) { sub.textContent = "couldn't load album"; loaded = false; }
       }
+      if (!sub.hidden) stopAuditionIn(sub);      // collapsing hides the player
       sub.hidden = !sub.hidden;
       toggle.textContent = sub.hidden ? "▸" : "▾";
       toggle.setAttribute("aria-expanded", String(!sub.hidden));
@@ -161,6 +164,7 @@
     inc.checked = true; inc.disabled = false; inc.hidden = false;
     card.querySelector(".chosen").textContent = "✓ " + label;
     card.querySelector(".searcher").hidden = true;
+    stopAuditionIn(card);
     card.querySelector(".results").textContent = "";
     card.classList.remove("skipped");
     markTouched(card.dataset.pos);
@@ -189,6 +193,14 @@
         opt.dataset.key = track.rating_key;
         opt.dataset.title = title;
         opt.dataset.sub = sub;
+        const optAud = el("span", "aud", "▶");
+        optAud.dataset.audKey = track.rating_key;
+        optAud.title = "Audition this version";
+        optAud.addEventListener("click", function (e) {
+          e.stopPropagation(); e.preventDefault();
+          mountAudition(row, track.rating_key, true, null);
+        });
+        opt.appendChild(optAud);
         opt.appendChild(el("span", "dd-title trunc", title));
         opt.appendChild(el("span", "dd-sub trunc", sub));
         opt.addEventListener("click", function () { selectDdOpt(opt); });
@@ -559,6 +571,14 @@
     if (auditionEl && host && host.nextElementSibling === auditionEl) stopAudition();
   }
 
+  // Stop if the player lives inside `container`. Search results mount the
+  // player among themselves, and emptying or hiding the list would otherwise
+  // detach it while the audio plays on — no controls, and on the proxy path a
+  // server thread held open.
+  function stopAuditionIn(container) {
+    if (auditionEl && container && container.contains(auditionEl)) stopAudition();
+  }
+
   // `after` is the node to open beneath; `asRow` wraps in a <tr> for the
   // preview table, otherwise a plain div (search results).
   async function mountAudition(after, ratingKey, asRow, trigger) {
@@ -594,10 +614,14 @@
     auditionEl = host;
     if (trigger) trigger.classList.add("playing");
 
+    // Pinned for the life of this audition: re-reading it on a seek would let
+    // a mid-playback toggle change the stream's mode while the offset
+    // arithmetic still assumed the old one.
+    const pref = transcodePref();
     let data;
     try {
       const resp = await fetch("/audition/" + encodeURIComponent(ratingKey) +
-                               "?transcode=" + (transcodePref() ? "1" : "0"));
+                               "?transcode=" + (pref ? "1" : "0"));
       data = await resp.json();
       if (!resp.ok || data.error) throw new Error(data.error || "unavailable");
     } catch (err) {
@@ -672,7 +696,7 @@
       // Only our own route takes the preference; a direct Plex URL already
       // encodes the choice in which endpoint it points at.
       if (url.origin === location.origin) {
-        url.searchParams.set("transcode", transcodePref() ? "1" : "0");
+        url.searchParams.set("transcode", pref ? "1" : "0");
       }
       baseOffset = t;
       const wasPlaying = !audio.paused;
