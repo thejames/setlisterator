@@ -209,6 +209,8 @@
         <div class="sub trunc">{{ f.album }}{% if f.album %} · {% endif %}{{ f.tier }}/{{ f.source }}</div>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" class="aud-btn" data-aud-fuzzy="{{ f.position }}"
+                title="Audition this match" aria-label="Audition">▶</button>
         <button type="button" class="btn-sm btn-amber" data-accept="{{ f.position }}">Accept</button>
         <button type="button" class="btn-sm" data-reject="{{ f.position }}">Reject</button>
       </div>

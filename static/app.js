@@ -127,6 +127,15 @@
             tb.type = "button";
             const st = stars(tr.rating);
             if (st) tb.appendChild(el("span", "result-stars", st));
+            // Same as a plain search hit: hear it before you pick it.
+            const tAud = el("span", "aud", "▶");
+            tAud.title = "Audition this track";
+            tAud.addEventListener("click", function (e) {
+              e.stopPropagation();
+              e.preventDefault();
+              mountAudition(tb, tr.rating_key, false, null);
+            });
+            tb.appendChild(tAud);
             tb.addEventListener("click", function () { onPick(tr, tr.title); });
             sub.appendChild(tb);
           });
@@ -275,6 +284,17 @@
     updateCount();
   }
   function wireFuzzyCard(card) {
+    // Hear the proposed track before accepting it into the setlist — the whole
+    // question a fuzzy card asks. The track is whatever the row currently
+    // picks, so there is no key to carry on the card itself.
+    const p = card.querySelector("[data-aud-fuzzy]");
+    if (p) p.addEventListener("click", function () {
+      if (p.classList.contains("playing")) { stopAudition(); return; }
+      const row = document.querySelector(
+        'tr[data-rownum="' + p.dataset.audFuzzy + '"]');
+      const key = row && rowPick(row);
+      if (key) mountAudition(card, key, false, p);
+    });
     const a = card.querySelector("[data-accept]");
     const r = card.querySelector("[data-reject]");
     if (a) a.addEventListener("click", function () { stopAudition(); onAccept(a); });
@@ -300,6 +320,10 @@
     right.appendChild(el("div", "sub trunc", candSub(song)));
     const btns = el("div");
     btns.style.cssText = "display:flex;gap:8px;justify-content:flex-end";
+    const aud = el("button", "aud-btn", "▶");
+    aud.type = "button"; aud.dataset.audFuzzy = song.position;
+    aud.title = "Audition this match"; aud.setAttribute("aria-label", "Audition");
+    btns.appendChild(aud);
     const acc = el("button", "btn-sm btn-amber", "Accept");
     acc.type = "button"; acc.dataset.accept = song.position;
     const rej = el("button", "btn-sm", "Reject");
@@ -987,6 +1011,8 @@
 
       const rmTd = el("td");
       rmTd.style.textAlign = "right";
+      // Both controls on one line; stacked, they make every row taller.
+      const actions = el("div", "trackactions");
       // Audition a track already in the playlist — same roaming player the
       // preview rows and search results use, mounted under this row.
       const aud = el("button", "aud-btn", "▶");
@@ -997,7 +1023,7 @@
         if (aud.classList.contains("playing")) { stopAudition(); return; }
         mountAudition(tr, key, true, aud);
       });
-      rmTd.appendChild(aud);
+      actions.appendChild(aud);
       const rm = el("button", "trackrm", "✕");
       rm.type = "button";
       rm.setAttribute("aria-label", "Remove track");
@@ -1005,7 +1031,8 @@
         stopAuditionFor(tr);   // the row is going away; so is anything under it
         picked.delete(key); tr.remove(); renumber(); refresh();
       });
-      rmTd.appendChild(rm);
+      actions.appendChild(rm);
+      rmTd.appendChild(actions);
 
       tr.addEventListener("dragstart", function () {
         stopAudition();        // reordering would strand the player mid-table

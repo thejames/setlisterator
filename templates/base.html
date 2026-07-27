@@ -406,6 +406,13 @@
            padding: 0 6px; font-size: 11px; }
     .aud:hover { color: var(--accent); }
     .auditionbox { margin: 4px 0 6px; }
+    /* Picker row actions on one line — stacked, they make every row taller.
+       Distinct from .rowactions, which is the History/Playlists row toolbar. */
+    .trackactions { display: flex; gap: 6px; align-items: center;
+                    justify-content: flex-end; }
+    /* On a fuzzy card it sits beside Accept/Reject, so match their height
+       rather than rendering as a sliver against them. */
+    .fuzzycard .aud-btn { padding: 8px 11px; font-size: 13px; }
     .gear-btn { display: inline-flex; align-items: center; padding: 4px 6px; }
     /* Right-anchored: it's the last item in the bar and wide enough that the
        default left: 0 pushes it off the edge of the page. */
