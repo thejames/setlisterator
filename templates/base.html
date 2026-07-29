@@ -75,7 +75,7 @@
 
     /* Inputs / selects / buttons */
     label { display: block; margin: 14px 0; font-weight: 600; color: var(--muted); }
-    input[type=text], input:not([type]), input[type=search] {
+    input[type=text], input:not([type]), input[type=search], input[type=url] {
       display: block; width: 100%; max-width: 560px; margin-top: 6px;
       padding: 10px 12px; font: inherit; color: var(--text); box-sizing: border-box;
       background: var(--panel2); border: 1px solid var(--border); border-radius: 9px;
@@ -149,6 +149,11 @@
     .posterfield { margin: 18px 0 2px; }
     .posterrow { display: flex; align-items: center; gap: 12px; margin: 8px 0 6px; }
     .posterrow input[type=file] { max-width: 340px; font-size: 13px; }
+    /* Narrower than the 560px default, to line up with the file input above.
+       Two selectors deep on purpose: a bare .posterlink loses to the
+       input[type=url] rule above, which is one specificity point heavier. */
+    .posterlinkrow { margin: 0 0 6px; }
+    .posterrow .posterlink { max-width: 340px; margin-top: 0; }
     .posterprev { width: 46px; height: 46px; object-fit: cover; border-radius: 8px;
       border: 1px solid var(--border); }
     .posternote { color: var(--accent); }

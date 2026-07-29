@@ -485,20 +485,33 @@
     note.hidden = !text;
     note.classList.toggle("bad", !!bad);
   }
+  // The file wins server-side when both are filled (ADR 0005), so once a file
+  // is picked the link box goes away rather than sitting there looking like it
+  // still counts. Clearing the file brings it back with whatever was typed.
+  function posterLinkVisible(field, visible) {
+    const row = field.querySelector("[data-poster-linkrow]");
+    if (row) row.hidden = !visible;
+  }
   function onPosterPick(input) {
     const field = input.closest("[data-poster-field]");
     const prev = field && field.querySelector("[data-poster-preview]");
     const file = input.files && input.files[0];
     if (prev) { prev.hidden = true; prev.removeAttribute("src"); }
     if (!field) return;
+    posterLinkVisible(field, !file);
     if (!file) { posterNote(field, ""); return; }
     const pol = posterPolicy(field);
+    // A file we've just flagged as unusable isn't beating anything, so the link
+    // box comes back — the server falls through to it for exactly this case,
+    // and hiding it would misreport which image is about to be used.
     if (pol.types.length && pol.types.indexOf(file.type) === -1) {
       posterNote(field, "That’s not a JPEG, PNG or WebP — it won’t be used.", true);
+      posterLinkVisible(field, true);
       return;
     }
     if (pol.max && file.size > pol.max) {
       posterNote(field, "That image is over " + mbLabel(pol.max) + " — it won’t be used.", true);
+      posterLinkVisible(field, true);
       return;
     }
     posterNote(field, "");

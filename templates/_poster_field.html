@@ -1,8 +1,10 @@
-{# Optional playlist poster upload, shared by the setlist create form and the
-   _picker form (Build + editor). Progressive enhancement in app.js adds a
-   thumbnail preview + client-side type/size pre-check; the bare input works
-   fine with no JS. The image is best-effort (ADR 0002) — the server never
-   blocks a save over it. On the editor an empty field keeps the current image. #}
+{# Optional playlist poster, shared by the setlist create form and the _picker
+   form (Build + editor). Two sources: an upload or a link (ADR 0005). Both are
+   plain form controls that work with no JS; app.js adds a thumbnail preview, a
+   client-side type/size pre-check, and hides the link box once a file is picked
+   (the file wins server-side either way). The image is best-effort (ADR 0002) —
+   the server never blocks a save over it. On the editor an empty field keeps
+   the current image. #}
 <div class="posterfield" data-poster-field
      data-poster-accept="{{ poster_policy.accept }}"
      data-poster-max="{{ poster_policy.max_bytes }}">
@@ -11,6 +13,16 @@
     <input type="file" name="poster" accept="{{ poster_policy.accept }}"
            data-poster-input aria-label="Playlist image">
     <img class="posterprev" data-poster-preview alt="Selected image preview" hidden>
+  </div>
+  <div class="posterrow posterlinkrow" data-poster-linkrow>
+    {# type="text", not "url": a scheme-less "example.com/cover.png" fails HTML5
+       constraint validation, and the browser then refuses to submit the *whole
+       form* — a bad image blocking a save, which is exactly what ADR 0002 rules
+       out. The server decides what a link is (core.fetch_poster_link) and
+       declines it with a warning like any other unusable image. #}
+    <input type="text" name="poster_link" class="posterlink" data-poster-link
+           placeholder="…or paste an image link"
+           aria-label="Playlist image link">
   </div>
   <div class="sub posternote" data-poster-note hidden></div>
   <div class="sub">JPEG, PNG or WebP, up to&nbsp;{{ poster_policy.max_label }} —

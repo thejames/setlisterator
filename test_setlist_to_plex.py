@@ -5,6 +5,8 @@ playlist-name generation, and the unique-name suffixing — i.e. everything that
 doesn't require a live Plex server or setlist.fm key. Run with: pytest
 """
 
+import os
+
 import pytest
 
 import setlist_to_plex as m
@@ -1387,6 +1389,145 @@ def test_create_playlist_manual_records_without_summary(monkeypatch, tmp_path):
 
 
 # --- playlist poster (set_playlist_poster + create/set_playlist wiring) ------
+
+def test_sniff_image_type_identifies_allowed_formats():
+    # Magic numbers, not guesses: JFIF/Exif JPEG, the PNG signature, RIFF/WEBP.
+    assert m.sniff_image_type(b"\xff\xd8\xff\xe0\x00\x10JFIF") == "image/jpeg"
+    assert m.sniff_image_type(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0d") == "image/png"
+    assert m.sniff_image_type(b"RIFF\x24\x00\x00\x00WEBPVP8 ") == "image/webp"
+
+
+def test_sniff_image_type_rejects_what_it_cannot_vouch_for():
+    assert m.sniff_image_type(b"<!DOCTYPE html><html><body>404") is None
+    assert m.sniff_image_type(b"GIF89a\x01\x00\x01\x00") is None   # image, but not ours
+    assert m.sniff_image_type(b"RIFF\x24\x00\x00\x00WAVEfmt ") is None  # RIFF, not WebP
+    assert m.sniff_image_type(b"\xff\xd8") is None                 # too short to vouch
+    assert m.sniff_image_type(b"") is None
+
+
+# --- poster from a link (fetch_poster_link) ---------------------------------
+#
+# Offline like the rest of the suite: requests.get is replaced with a canned
+# streaming response. The seam under test is (link) -> (temp path, reason),
+# the same shape web._take_poster_upload already returns.
+
+_PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 200
+
+
+def _canned_get(payload, status=200, boom=None):
+    """Stand in for requests.get(..., stream=True)."""
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def raise_for_status(self):
+            if status >= 400:
+                raise m.requests.exceptions.HTTPError(f"{status} error")
+
+        def iter_content(self, chunk_size=1):
+            for i in range(0, len(payload), chunk_size):
+                yield payload[i:i + chunk_size]
+
+    def _get(url, **kwargs):
+        if boom is not None:
+            raise boom
+        return _Resp()
+    return _get
+
+
+def test_fetch_poster_link_saves_an_image_to_a_temp_file(monkeypatch):
+    monkeypatch.setattr(m.requests, "get", _canned_get(_PNG_BYTES))
+    path, reason = m.fetch_poster_link("https://example.test/cover.png")
+    assert reason is None
+    with open(path, "rb") as fh:
+        assert fh.read() == _PNG_BYTES
+    assert path.endswith(".png")      # extension comes from the bytes, not the URL
+    os.remove(path)
+
+
+def test_fetch_poster_link_stops_at_the_size_ceiling(monkeypatch):
+    # An endless stream must not be buffered forever — the cap is the only
+    # thing between a hostile link and the app's memory. Without it this hangs.
+    class _Endless:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size=1):
+            while True:
+                yield b"\x00" * chunk_size
+
+    monkeypatch.setattr(m.requests, "get", lambda url, **kw: _Endless())
+    assert m.fetch_poster_link("https://example.test/huge.png") == (None, "too large")
+
+
+def test_fetch_poster_link_accepts_an_image_sitting_on_the_limit(monkeypatch):
+    # The ceiling is inclusive, same as check_poster's. Off-by-one here would
+    # decline a file the upload path accepts.
+    exact = b"\x89PNG\r\n\x1a\n" + b"\x00" * (m.POSTER_MAX_BYTES - 8)
+    monkeypatch.setattr(m.requests, "get", _canned_get(exact))
+    path, reason = m.fetch_poster_link("https://example.test/big.png")
+    assert reason is None
+    os.remove(path)
+
+
+def test_fetch_poster_link_declines_a_link_that_errors(monkeypatch):
+    # A 404 page is still a 200-shaped response body to anything downstream, so
+    # the status has to stop it here rather than get sniffed as "not an image".
+    monkeypatch.setattr(m.requests, "get", _canned_get(b"nope", status=404))
+    assert m.fetch_poster_link("https://example.test/gone.png") == (
+        None, "couldn't be fetched")
+
+
+def test_fetch_poster_link_declines_a_link_it_cannot_reach(monkeypatch):
+    boom = m.requests.exceptions.ConnectionError("no route to host")
+    monkeypatch.setattr(m.requests, "get", _canned_get(b"", boom=boom))
+    assert m.fetch_poster_link("https://nowhere.test/cover.png") == (
+        None, "couldn't be fetched")
+
+
+def test_fetch_poster_link_declines_a_malformed_url():
+    # These fail inside urllib3 while parsing the URL — before any socket, so
+    # this stays offline — and they raise bare ValueErrors that requests does
+    # NOT wrap in RequestException. Both are reachable by hand, and the first
+    # even satisfies a browser's type="url" validation, so neither may escape:
+    # an unhandled one takes the whole save down with it (ADR 0002).
+    for link in ("http://" + "a" * 64 + ".com/cover.png",   # label too long
+                 "http://["):                                # invalid IPv6 URL
+        assert m.fetch_poster_link(link) == (None, "couldn't be fetched")
+
+
+def test_fetch_poster_link_only_follows_web_links(monkeypatch):
+    # Nothing should reach requests at all for a non-web scheme — a local path
+    # is not a poster source.
+    monkeypatch.setattr(m.requests, "get",
+                        lambda *a, **kw: pytest.fail("non-web link was fetched"))
+    for link in ("file:///etc/passwd", "/etc/passwd", "ftp://host/cover.png"):
+        assert m.fetch_poster_link(link) == (None, "not a web link")
+    # ...and the ordinary schemes still go through.
+    monkeypatch.setattr(m.requests, "get", _canned_get(_PNG_BYTES))
+    for link in ("http://example.test/c.png", "HTTPS://Example.test/c.png"):
+        path, reason = m.fetch_poster_link(link)
+        assert reason is None
+        os.remove(path)
+
+
+def test_fetch_poster_link_declines_a_page_dressed_as_an_image(monkeypatch):
+    # 200 OK, Content-Type image/jpeg, and it's an HTML error page. Only the
+    # bytes catch this one.
+    monkeypatch.setattr(m.requests, "get",
+                        _canned_get(b"<!DOCTYPE html><html>Not found</html>"))
+    assert m.fetch_poster_link("https://example.test/cover.jpg") == (
+        None, "unsupported type")
+
 
 def test_check_poster_accepts_allowed_types():
     assert m.check_poster("image/jpeg", 1000) == (".jpg", None)
