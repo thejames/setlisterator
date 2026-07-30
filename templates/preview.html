@@ -37,7 +37,7 @@
   <label for="prefer_album" style="font-weight:600;font-size:13px">Prefer album</label>
   <select name="prefer_album" id="prefer_album" data-album-select
           style="background:var(--panel2);color:var(--text);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;font:inherit">
-    <option value=""{% if not result.preferred_album %} selected{% endif %}>No preference</option>
+    <option value=""{% if not result.preferred_album %} selected{% endif %}>Earliest album</option>
     {% for a in result.album_options %}
     <option value="{{ a.album }}"{% if a.album == result.preferred_album %} selected{% endif %}>{{ a.album }} ({{ a.songs }} song{{ '' if a.songs == 1 else 's' }})</option>
     {% endfor %}

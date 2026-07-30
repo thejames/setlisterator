@@ -465,6 +465,50 @@ def _track_album(track):
     return getattr(track, "parentTitle", None) or ""
 
 
+def _track_year(track):
+    """The release year of a Plex track's album, or None if unknown.
+
+    Plex sends ``parentYear`` on every <Track> on both endpoints the matcher
+    uses, so the year rides along on tracks we already fetch — no album lookups,
+    and no requests of any kind. plexapi 4.18.1 doesn't map it
+    (``Track._loadData`` reads only ``year``), so it comes off the raw element;
+    the plain attribute is probed first so this starts working by itself if
+    plexapi ever maps it, and so offline fakes can set one the way they do
+    ``parentTitle``.
+
+    Never raises, and a non-positive or unparseable year counts as unknown —
+    which sorts last, not first (see ADR 0006).
+    """
+    raw = getattr(track, "parentYear", None)
+    if raw is None:
+        # Both fallbacks read the raw element, never `getattr(track, "year")`:
+        # plexapi *does* define `year` on Track and leaves it None here, and
+        # reading a None public attribute off a partial object silently fires a
+        # per-track reload request (PlexPartialObject.__getattribute__). Names
+        # starting with "_" are exempt from that, so this stays free.
+        try:
+            attrib = track._data.attrib
+            raw = attrib.get("parentYear") or attrib.get("year")
+        except Exception:
+            raw = None
+    try:
+        year = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return year if year > 0 else None
+
+
+# Sort position for a candidate whose album year is unknown: after every dated
+# one. Undated means unknown, not old.
+_YEAR_UNKNOWN = float("inf")
+
+
+def _year_key(track):
+    """``_track_year`` as a sort key, undated last."""
+    year = _track_year(track)
+    return _YEAR_UNKNOWN if year is None else year
+
+
 # A resolved match for one setlist song. tier is one of TIER_NAMES; source is
 # 'scoped' (the artist's own tracks) or 'global' (fallback title search).
 Match = namedtuple("Match", "track quality tier source")
@@ -527,7 +571,13 @@ def _ranked_matches(target_simple, target_aggr, tracks, setlist_artist, scoped):
     Every track whose title matches at some tier is included. When ``scoped``
     is True the tracks are already known to be by the setlist artist, so artist
     matching is assumed; otherwise it is checked per track and artist mismatches
-    are demoted below every artist-confirmed match. Ties keep library order.
+    are demoted below every artist-confirmed match.
+
+    Same-rank ties break on album year ascending — the earliest album is the
+    default version (ADR 0006). Year sorts strictly *within* a rank, never
+    across one, so a better title always wins over an older album and a medley
+    is never floated above a cleaner match. Undated albums come last, and ties
+    still keep library order because the sort is stable.
     """
     ranked = []
     for track in tracks:
@@ -539,7 +589,8 @@ def _ranked_matches(target_simple, target_aggr, tracks, setlist_artist, scoped):
         overall = title_rank if artist_ok else title_rank + 4
         quality = "exact" if (artist_ok and title_rank == 0) else "fuzzy"
         ranked.append((overall, track, quality, TIER_NAMES[title_rank]))
-    ranked.sort(key=lambda r: r[0])  # stable: equal-rank ties keep input order
+    # Stable: candidates on equally-old albums keep input (library) order.
+    ranked.sort(key=lambda r: (r[0], _year_key(r[1])))
     return ranked
 
 
@@ -644,19 +695,16 @@ def match_song(section, title, setlist_artist, artist_tracks):
     return candidates[0] if candidates else None
 
 
-# A cohesive album must cover at least this share of the setlist's matched songs
-# (and a small absolute minimum) before it's auto-preferred — so an incidental
-# shared album doesn't bias an ordinary setlist, but a full live recording does.
-ALBUM_COHESION_MIN_FRACTION = 0.5
-ALBUM_COHESION_MIN_SONGS = 3
-
-
 def _album_coverage(per_song_albums):
     """Tally how many setlist songs each album can supply, highest first.
 
     ``per_song_albums`` is one entry per matched song: the set of (non-medley)
     album titles that song matched on. Returns [{"album", "songs"}, ...] sorted
     by coverage descending, then album title.
+
+    This is a *suggestion*, not a decision: it orders the preview's album
+    dropdown, so a full live recording of the show leads the list with its song
+    count and is one click away. Nothing is preferred automatically (ADR 0006).
     """
     counts = {}
     for albums in per_song_albums:
@@ -664,22 +712,6 @@ def _album_coverage(per_song_albums):
             counts[album] = counts.get(album, 0) + 1
     return [{"album": album, "songs": n} for album, n in
             sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))]
-
-
-def _auto_album(album_options, total_matched):
-    """The dominant album worth auto-preferring, or '' if none is cohesive.
-
-    Picks the top-coverage album only when it covers a strong share of the
-    matched songs (a recording of the whole show), so ordinary setlists — where
-    songs are spread across many studio albums — get no bias.
-    """
-    if not album_options or total_matched < ALBUM_COHESION_MIN_SONGS:
-        return ""
-    top = album_options[0]
-    if (top["songs"] >= ALBUM_COHESION_MIN_SONGS
-            and top["songs"] >= ALBUM_COHESION_MIN_FRACTION * total_matched):
-        return top["album"]
-    return ""
 
 
 def unique_playlist_name(plex, name):
@@ -1012,10 +1044,12 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None,
     it supplies the ``(client, section)`` the two-tier matcher searches.
 
     ``prefer_album`` biases which version of a song is chosen when it exists on
-    several albums: ``None`` auto-detects a cohesive album (e.g. a live recording
-    of the whole show) and prefers it; ``""`` forces no preference; a non-empty
-    title prefers that album. The chosen album and the available album options
-    (by coverage) are returned as ``preferred_album`` / ``album_options``.
+    several albums: a non-empty title floats that album above title tier, while
+    ``None`` and ``""`` alike mean no preference — the default is then the
+    earliest album carrying each song (ADR 0006). No album is ever preferred
+    automatically. The preference and the available album options (by coverage,
+    which is what populates the preview's dropdown) are returned as
+    ``preferred_album`` / ``album_options``.
     """
     try:
         data = fetch_setlist(setlist_id, config["api_key"])
@@ -1066,9 +1100,9 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None,
     # setlist.fm's page maps songs to albums; use it to label missing tracks.
     album_map = fetch_album_map(show["url"])
 
-    # Pass 1: match once with no album preference, both to measure which album
-    # covers the most of the setlist (cohesion) and to reuse as the result.
-    # limit=10 so several album versions of a song are retained for re-ordering.
+    # Pass 1: match once with no album preference, both to tally which albums
+    # cover the most of the setlist (the dropdown's order) and to reuse as the
+    # result. limit=10 so several album versions of a song survive re-ordering.
     first_pass = [(position, title,
                    match_candidates(section, title, show["artist"],
                                     artist_tracks, limit=10))
@@ -1079,10 +1113,14 @@ def gather_matches(config, setlist_id, name=None, prefer_album=None,
         for _, _, cands in first_pass if cands]
     album_options = _album_coverage(per_song_albums)
 
-    if prefer_album is None:                  # auto-detect a cohesive album
-        preferred_album = _auto_album(album_options, len(per_song_albums))
-    else:                                     # explicit ("" forces no preference)
-        preferred_album = prefer_album or ""
+    # Earliest-album ordering is silent when it can't work, so say so: a library
+    # whose tracks carry no year at all falls back to plain library order.
+    all_candidates = [c for _, _, cands in first_pass for c in cands]
+    if all_candidates and not any(_track_year(c.track) for c in all_candidates):
+        logger.debug("Album:   no candidate resolved an album year; "
+                     "falling back to library order")
+
+    preferred_album = prefer_album or ""      # None and "" both mean earliest
     if preferred_album:
         logger.info("Album:   preferring %r", preferred_album)
 

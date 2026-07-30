@@ -26,8 +26,12 @@ The property that a touched selection survives a re-match within the same previe
 _Avoid_: Pinned, locked, persisted (nothing is written to disk — sticky is in-session only).
 
 **Preferred album**:
-The album the matcher favours when a setlist song appears on more than one album in the library. Applies only to untouched selections.
+The album the matcher favours when a setlist song appears on more than one album in the library. Always explicitly chosen — never inferred from the setlist — and applies only to untouched selections. Absent one, the **earliest album** decides.
 _Avoid_: Preferred release, source album.
+
+**Earliest album**:
+The default source for a version — the oldest-dated album in your library carrying that song. Applied per song, so songs in one setlist can come from different albums. Used whenever no preferred album is named, and only beneath title match quality, so a better title always wins over an older album. An album with no year sorts last, never first: undated means unknown, not old.
+_Avoid_: Earliest release, first release, original release (a *release* is the album setlist.fm attributes a song to), oldest track.
 
 **Playlist poster**:
 The image shown as a playlist's thumbnail in Plex — optionally set from an uploaded file when a playlist is created or later edited in the app. What users informally call the playlist's "folder image".
