@@ -179,7 +179,8 @@ anything; songs not in your library are flagged inline (and also listed
 separately below). When a song matches more than one library track (e.g. the
 same song on a studio album, a live record, and a compilation) its row shows a
 **dropdown** so you can pick the version — by album — you want; the best match
-is preselected. Review it (and tweak the playlist name if you like), then click
+is preselected, and between equally good matches that's the one on the
+[earliest album](#how-matching-works). Review it (and tweak the playlist name if you like), then click
 **Create playlist** to commit. Create rebuilds the chosen tracks by their Plex
 rating keys, so nothing is re-matched, and the run is recorded in the same
 [history](#processed-setlist-history) the CLI uses.
@@ -193,9 +194,11 @@ search. The summary **chips** above the table double as filters: click one
 (exact, fuzzy, multi-match, missing) to flash and highlight those rows, then
 click it again — or the **songs** total — to clear. The source **URL bar**
 links out to the show on setlist.fm in a new tab. The **Prefer album** dropdown
-re-matches multi-album songs to a chosen album in place; any row you've already
-touched (a hand-pick, an accepted fuzzy, a filled-in missing track) stays put
-and is marked, so switching albums never discards your edits.
+re-matches multi-album songs to a chosen album in place; it starts on *Earliest
+album* (the default) and lists the albums that cover the most of this setlist
+first, so a live recording of the whole show is one click away. Any row you've
+already touched (a hand-pick, an accepted fuzzy, a filled-in missing track)
+stays put and is marked, so switching albums never discards your edits.
 
 **Audition** (▶) lets you hear a track before you commit to it — the point
 being to check a match is the song you actually expect. It's on every place a
@@ -321,6 +324,13 @@ whitespace collapsed) across four tiers:
 Anything past the exact tier is reported under **FUZZY MATCHES** so you can
 spot-check for false positives. A medley track that matches more than one
 setlist song is added to the playlist only once.
+
+When a song matches equally well on several albums you own, the version on the
+**earliest album** wins — usually the studio version rather than a live cut or a
+compilation. The album year only breaks ties *within* a tier, so a better title
+always beats an older album, and an album your library has no year for sorts
+last rather than first. The web app's **Prefer album** dropdown overrides this
+per show.
 
 ## Output
 

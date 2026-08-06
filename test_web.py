@@ -931,8 +931,9 @@ def test_preview_prefer_album_forwarded_and_rendered(client, monkeypatch):
     assert 'value="Live@ Sun Dome" selected' in body         # pre-selected
 
 
-def test_preview_first_load_auto_detects_album(client, monkeypatch):
-    # No prefer_album in the form -> None reaches core (auto-detect).
+def test_preview_first_load_sends_no_album_preference(client, monkeypatch):
+    # No prefer_album in the form -> None reaches core, which now means the
+    # earliest album rather than an auto-detected one.
     captured = {}
 
     def fake_gather(cfg, sid, name=None, prefer_album=None):
@@ -943,6 +944,24 @@ def test_preview_first_load_auto_detects_album(client, monkeypatch):
     monkeypatch.setattr(core, "load_history", lambda path: {})
     client.post("/preview", data={"setlist": "abc"})
     assert captured["prefer_album"] is None
+
+
+def test_preview_album_dropdown_defaults_to_earliest(client, monkeypatch):
+    # With no album preferred, the dropdown's first option is the default the
+    # matcher actually applied — "Earliest album", selected.
+    def fake_gather(cfg, sid, name=None, prefer_album=None):
+        result = _preview_result()
+        result["preferred_album"] = ""
+        result["album_options"] = [{"album": "Live@ Sun Dome", "songs": 5}]
+        return result
+
+    monkeypatch.setattr(core, "gather_matches", fake_gather)
+    monkeypatch.setattr(core, "load_history", lambda path: {})
+    body = client.post("/preview", data={"setlist": "abc"}).data.decode()
+    assert '<option value="" selected>Earliest album</option>' in body
+    assert "No preference" not in body
+    # the cohesive album is still suggested, still first, still counted
+    assert "Live@ Sun Dome (5 songs)" in body
 
 
 def test_rematch_returns_songs_json(client, monkeypatch):

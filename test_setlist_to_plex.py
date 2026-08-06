@@ -5,6 +5,8 @@ playlist-name generation, and the unique-name suffixing — i.e. everything that
 doesn't require a live Plex server or setlist.fm key. Run with: pytest
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 import setlist_to_plex as m
@@ -240,13 +242,17 @@ def test_unique_name_ignores_titleless_objects():
 
 class _FakeTrack:
     def __init__(self, title, artist, rating_key=None, album="Some Album",
-                 rating=None):
+                 rating=None, year=None):
         self.title = title
         self.grandparentTitle = artist
         self.originalTitle = None
         self.parentTitle = album
         self.ratingKey = rating_key
         self.userRating = rating
+        # The album's release year, as Plex sends it on every <Track>. Set as a
+        # plain attribute the way parentTitle is — _track_year probes the
+        # attribute before reaching into the raw plexapi element.
+        self.parentYear = year
 
 
 class _FakeArtist:
@@ -838,7 +844,7 @@ def test_load_config_ok(monkeypatch):
     assert config["api_key"] == "k" and config["music_library"] == "Music"
 
 
-# --- album preference (prefer a cohesive album, e.g. a live recording) -----
+# --- album preference (an explicitly named album floats above tier) --------
 
 def test_prefer_album_first_floats_within_tier():
     # Same title on two albums (both exact) -> preferred floats up; with no
@@ -885,12 +891,130 @@ def test_album_coverage_counts_and_orders():
     assert {c["album"] for c in cov} == {"Live@ Sun Dome", "Sailing", "Frizzle Fry"}
 
 
-def test_auto_album_threshold():
-    assert m._auto_album([{"album": "Live", "songs": 3},
-                          {"album": "Studio", "songs": 1}], 4) == "Live"
-    assert m._auto_album([{"album": "X", "songs": 2}], 6) == ""   # below fraction
-    assert m._auto_album([{"album": "X", "songs": 2}], 2) == ""   # too few songs
-    assert m._auto_album([], 5) == ""
+def test_cohesion_auto_pick_is_gone():
+    # The cohesion auto-pick was removed (ADR 0006) — a cohesive album is a
+    # suggestion in the dropdown now, never an applied preference.
+    assert not hasattr(m, "_auto_album")
+
+
+# --- earliest album (the default version, ADR 0006) ------------------------
+
+class _RawTrack:
+    """A track exposing the year only through the raw plexapi element.
+
+    plexapi 4.18.1 doesn't map parentYear onto Track, so on a real server this
+    is the only path that resolves a year — and it also models the dragon in
+    PlexPartialObject.__getattribute__: reading a *public* attribute that's None
+    (as plexapi's own unmapped `year` always is here) fires a reload, i.e. one
+    HTTP request per track. Underscore names are exempt, so `_data` is free.
+    Any such read is counted, and the matcher must never make one.
+    """
+
+    def __init__(self, year=None, title="Wilson", album="Junta",
+                 rating_key=None):
+        self.title = title
+        self.grandparentTitle = "Phish"
+        self.parentTitle = album
+        self.ratingKey = rating_key
+        self.year = None                    # defined by plexapi, never sent
+        self.reloads = 0
+        attrib = {"parentYear": year} if year is not None else {}
+        self._data = SimpleNamespace(attrib=attrib)
+
+    def __getattribute__(self, attr):
+        value = object.__getattribute__(self, attr)
+        if not attr.startswith("_") and value is None:
+            object.__setattr__(self, "reloads", self.reloads + 1)
+        return value
+
+
+def test_track_year_reads_the_parent_year_attribute():
+    assert m._track_year(_FakeTrack("Wilson", "Phish", year=1989)) == 1989
+    assert m._track_year(_FakeTrack("Wilson", "Phish", year="1989")) == 1989
+
+
+def test_track_year_falls_back_to_the_raw_element():
+    assert m._track_year(_RawTrack("1975")) == 1975
+
+
+def test_ordering_uses_the_raw_element_and_costs_no_requests():
+    # The path a real server actually takes: year only in _data.attrib, and an
+    # undated album whose attrib is empty. Reading plexapi's own None-valued
+    # `year` here would cost one HTTP round-trip per track — assert we don't.
+    tracks = [
+        _RawTrack(rating_key=1, album="Undated"),
+        _RawTrack("1994", rating_key=2, album="A Live One"),
+        _RawTrack("1989", rating_key=3, album="Junta"),
+    ]
+    cands = m.match_candidates(_FakeSection(), "Wilson", "Phish", tracks)
+    assert [c.track.ratingKey for c in cands] == [3, 2, 1]   # 1989, 1994, undated
+    assert [t.reloads for t in tracks] == [0, 0, 0]
+
+
+def test_track_year_treats_missing_and_non_positive_as_unknown():
+    assert m._track_year(_FakeTrack("Wilson", "Phish")) is None
+    assert m._track_year(_FakeTrack("Wilson", "Phish", year=0)) is None
+    assert m._track_year(_FakeTrack("Wilson", "Phish", year=-5)) is None
+    assert m._track_year(_FakeTrack("Wilson", "Phish", year="n/a")) is None
+    assert m._track_year(object()) is None            # never raises
+
+
+def test_candidates_default_to_the_earliest_album():
+    # Same title on two albums, the newer one first in library order.
+    tracks = [
+        _FakeTrack("Wilson", "Phish", rating_key=1, album="A Live One", year=1994),
+        _FakeTrack("Wilson", "Phish", rating_key=2, album="Junta", year=1989),
+    ]
+    cands = m.match_candidates(_FakeSection(), "Wilson", "Phish", tracks)
+    assert [c.track.ratingKey for c in cands] == [2, 1]
+
+
+def test_undated_albums_sort_last_and_keep_their_order():
+    tracks = [
+        _FakeTrack("Wilson", "Phish", rating_key=1, album="Undated A"),
+        _FakeTrack("Wilson", "Phish", rating_key=2, album="Undated B"),
+        _FakeTrack("Wilson", "Phish", rating_key=3, album="Junta", year=1989),
+    ]
+    cands = m.match_candidates(_FakeSection(), "Wilson", "Phish", tracks)
+    assert [c.track.ratingKey for c in cands] == [3, 1, 2]
+
+
+def test_year_never_crosses_a_title_tier():
+    # An exact match on a 2011 album still beats a loose match on a 1975 one.
+    tracks = [
+        _FakeTrack("Wilson (Live)", "Phish", rating_key=1, album="Old", year=1975),
+        _FakeTrack("Wilson", "Phish", rating_key=2, album="New", year=2011),
+    ]
+    cands = m.match_candidates(_FakeSection(), "Wilson", "Phish", tracks)
+    assert [c.track.ratingKey for c in cands] == [2, 1]
+
+
+def test_year_never_floats_a_medley_above_a_cleaner_match():
+    tracks = [
+        _FakeTrack("Wilson / Tweezer", "Phish", rating_key=1, album="Old", year=1975),
+        _FakeTrack("Wilson (Live)", "Phish", rating_key=2, album="New", year=2011),
+    ]
+    cands = m.match_candidates(_FakeSection(), "Wilson", "Phish", tracks)
+    assert [c.track.ratingKey for c in cands] == [2, 1]   # loose beats medley
+
+
+def test_no_years_anywhere_keeps_library_order():
+    tracks = [
+        _FakeTrack("Wilson", "Phish", rating_key=1, album="B"),
+        _FakeTrack("Wilson", "Phish", rating_key=2, album="A"),
+    ]
+    cands = m.match_candidates(_FakeSection(), "Wilson", "Phish", tracks)
+    assert [c.track.ratingKey for c in cands] == [1, 2]
+
+
+def test_prefer_album_still_outranks_an_earlier_album():
+    tracks = [
+        _FakeTrack("Wilson", "Phish", rating_key=1, album="Junta", year=1989),
+        _FakeTrack("Wilson", "Phish", rating_key=2, album="A Live One", year=1994),
+    ]
+    cands = m.match_candidates(_FakeSection(), "Wilson", "Phish", tracks)
+    assert [c.track.ratingKey for c in cands] == [1, 2]        # earliest default
+    assert m._prefer_album_first(cands, "A Live One")[0].track.ratingKey == 2
 
 
 def _gather_setlist_data():
@@ -907,12 +1031,19 @@ def _gather_setlist_data():
     }
 
 
-def _wire_gather(monkeypatch, library_tracks, album_map=None):
-    monkeypatch.setattr(m, "fetch_setlist", lambda sid, key: _gather_setlist_data())
+def _wire_setlist(monkeypatch, setlist, artist, library_tracks, album_map=None):
+    """Stub every network call gather_matches makes, for any setlist/artist."""
+    monkeypatch.setattr(m, "fetch_setlist", lambda sid, key: setlist)
     monkeypatch.setattr(m, "connect_plex", lambda u, t: object())
-    section = _FakeSection(artists=[_FakeArtist("Phish", library_tracks)])
+    section = _FakeSection(artists=[_FakeArtist(artist, library_tracks)])
     monkeypatch.setattr(m, "get_music_section", lambda plex, lib: section)
     monkeypatch.setattr(m, "fetch_album_map", lambda url: album_map or {})
+
+
+def _wire_gather(monkeypatch, library_tracks, album_map=None):
+    """_wire_setlist for the stock three-song Phish setlist above."""
+    _wire_setlist(monkeypatch, _gather_setlist_data(), "Phish",
+                  library_tracks, album_map)
 
 
 def test_gather_matches_builds_structure(monkeypatch):
@@ -1008,9 +1139,12 @@ def test_gather_matches_explicit_prefer_album(monkeypatch):
     assert any(o["album"] == "A Live One" for o in result["album_options"])
 
 
-def test_gather_matches_auto_detects_cohesive_album(monkeypatch):
-    # A full live recording covers the whole setlist -> auto-preferred, so every
-    # tie resolves to it even though studio versions exist on other albums.
+def _cohesive_live_setlist():
+    """A show whose library holds a full live recording of it, plus studio cuts.
+
+    The live album covers every song, so this is exactly the setlist the removed
+    cohesion auto-pick fired on.
+    """
     songs = ["Those Damned Blue-Collar Tweekers", "Tommy the Cat",
              "Jerry Was a Race Car Driver", "Wynona's Big Brown Beaver"]
     setlist = {
@@ -1019,37 +1153,87 @@ def test_gather_matches_auto_detects_cohesive_album(monkeypatch):
         "eventDate": "16-06-1992", "url": "https://setlist.fm/x.html",
         "sets": {"set": [{"song": [{"name": s} for s in songs]}]},
     }
-    LIVE = "Live@ USF Sun Dome, Tampa FL"
-    # Studio versions FIRST in library order, so without the album preference
-    # those would win — proving the cohesion re-order actually moves the pick.
-    library = [
-        _FakeTrack("Tommy the Cat", "Primus", rating_key=50, album="Sailing the Seas of Cheese"),
-        _FakeTrack("Jerry Was a Race Car Driver", "Primus", rating_key=51, album="Frizzle Fry"),
+    live = "Live@ USF Sun Dome, Tampa FL"
+    # The live album comes FIRST in library order, so only the earliest-album
+    # ordering can move the pick to the studio versions.
+    library = [_FakeTrack(s, "Primus", rating_key=i, album=live, year=1998)
+               for i, s in enumerate(songs, start=1)]
+    library += [
+        _FakeTrack("Tommy the Cat", "Primus", rating_key=50, year=1991,
+                   album="Sailing the Seas of Cheese"),
+        _FakeTrack("Jerry Was a Race Car Driver", "Primus", rating_key=51,
+                   album="Frizzle Fry", year=1990),
     ]
-    library += [_FakeTrack(s, "Primus", rating_key=i, album=LIVE)
-                for i, s in enumerate(songs, start=1)]
-    monkeypatch.setattr(m, "fetch_setlist", lambda sid, key: setlist)
-    monkeypatch.setattr(m, "connect_plex", lambda u, t: object())
-    section = _FakeSection(artists=[_FakeArtist("Primus", library)])
-    monkeypatch.setattr(m, "get_music_section", lambda plex, lib: section)
-    monkeypatch.setattr(m, "fetch_album_map", lambda url: {})
-
-    result = m.gather_matches(_CONFIG, "abc123")   # prefer_album=None -> auto
-    assert result["preferred_album"] == LIVE
-    assert result["album_options"][0]["album"] == LIVE
-    assert all(row["album"] == LIVE for row in result["matched"])
+    return setlist, live, library
 
 
-def test_gather_matches_empty_prefer_album_forces_no_preference(monkeypatch):
+def test_gather_matches_does_not_auto_prefer_a_cohesive_album(monkeypatch):
+    setlist, live, library = _cohesive_live_setlist()
+    _wire_setlist(monkeypatch, setlist, "Primus", library)
+
+    result = m.gather_matches(_CONFIG, "abc123")   # prefer_album=None
+    assert result["preferred_album"] == ""         # nothing auto-preferred
+    # ...but the live album is still suggested, still first, still counted.
+    assert result["album_options"][0] == {"album": live, "songs": 4}
+    # Songs available on an earlier studio album default to that version.
+    picked = {row["title"]: row["album"] for row in result["matched"]}
+    assert picked["Tommy the Cat"] == "Sailing the Seas of Cheese"
+    assert picked["Jerry Was a Race Car Driver"] == "Frizzle Fry"
+    # The two songs only the live album has still come from it.
+    assert picked["Wynona's Big Brown Beaver"] == live
+
+
+def test_gather_matches_still_honors_an_explicit_album(monkeypatch):
+    setlist, live, library = _cohesive_live_setlist()
+    _wire_setlist(monkeypatch, setlist, "Primus", library)
+
+    result = m.gather_matches(_CONFIG, "abc123", prefer_album=live)
+    assert result["preferred_album"] == live
+    assert all(row["album"] == live for row in result["matched"])
+
+
+def test_gather_matches_none_and_empty_prefer_album_agree(monkeypatch):
     library = [
-        _FakeTrack("Wilson", "Phish", rating_key=10, album="Junta"),
-        _FakeTrack("Wilson", "Phish", rating_key=99, album="A Live One"),
+        _FakeTrack("Wilson", "Phish", rating_key=99, album="A Live One", year=1994),
+        _FakeTrack("Wilson", "Phish", rating_key=10, album="Junta", year=1989),
         _FakeTrack("Tweezer (Reprise)", "Phish", rating_key=11, album="A Live One"),
     ]
     _wire_gather(monkeypatch, library)
-    result = m.gather_matches(_CONFIG, "abc123", prefer_album="")
-    assert result["preferred_album"] == ""
-    assert result["matched"][0]["rating_key"] == 10   # library order, no bias
+    for prefer in (None, ""):
+        result = m.gather_matches(_CONFIG, "abc123", prefer_album=prefer)
+        assert result["preferred_album"] == ""
+        assert result["matched"][0]["rating_key"] == 10   # earliest album wins
+
+
+def test_main_picks_the_earliest_album(monkeypatch, tmp_path):
+    # The CLI has no album flag, so "no preference" is its only mode — end to
+    # end through the real matcher, that must now mean the earliest album.
+    library = [
+        _FakeTrack("Wilson", "Phish", rating_key=99, album="A Live One", year=1994),
+        _FakeTrack("Wilson", "Phish", rating_key=10, album="Junta", year=1989),
+    ]
+    _wire_gather(monkeypatch, library)
+    fake = _FakeCreatePlex()
+    monkeypatch.setattr(m, "connect_plex", lambda u, t: fake)
+    monkeypatch.setattr(m, "load_config", lambda: _CONFIG)
+    monkeypatch.setattr(m, "history_path", lambda: tmp_path / "h.json")
+
+    assert m.main(["abc123", "--quiet"]) == m.EXIT_OK
+    _title, items = fake.created
+    assert [t.ratingKey for t in items] == [10]   # Junta, not A Live One
+
+
+def test_gather_matches_logs_when_no_candidate_has_a_year(monkeypatch, caplog):
+    library = [
+        _FakeTrack("Wilson", "Phish", rating_key=10, album="Junta"),
+        _FakeTrack("Wilson", "Phish", rating_key=99, album="A Live One"),
+    ]
+    _wire_gather(monkeypatch, library)
+    with caplog.at_level("DEBUG", logger=m.logger.name):
+        result = m.gather_matches(_CONFIG, "abc123")
+    assert result["matched"][0]["rating_key"] == 10   # library order, as before
+    assert any("year" in r.message.lower() and r.levelname == "DEBUG"
+               for r in caplog.records)
 
 
 # --- match_candidates ------------------------------------------------------

@@ -396,8 +396,9 @@ def _parse_and_match(req):
     Parses the form, runs `gather_matches`, and classifies any failure. Returns
     `(result, err)` where `err` is None on success or a `(kind, message)` pair —
     the caller renders whichever shape (HTML error page vs JSON) its route needs.
-    `prefer_album` absent (first preview) -> None -> auto-detect a cohesive
-    album; present (incl. "" for "No preference") -> used verbatim.
+    `prefer_album` is passed through verbatim, and absent (first preview) means
+    None — which core treats the same as the "" the "Earliest album" option
+    submits: no preference, so each song defaults to its earliest album.
     """
     setlist_arg = (req.form.get("setlist") or "").strip()
     name = (req.form.get("name") or "").strip() or None
