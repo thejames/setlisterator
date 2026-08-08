@@ -30,7 +30,7 @@ The album the matcher favours when a setlist song appears on more than one album
 _Avoid_: Preferred release, source album.
 
 **Playlist poster**:
-The image shown as a playlist's thumbnail in Plex — optionally set from an uploaded file when a playlist is created or later edited in the app. What users informally call the playlist's "folder image".
+The image shown as a playlist's thumbnail in Plex — optionally set when a playlist is created or later edited in the app, from either an uploaded file or a link the app fetches itself. What users informally call the playlist's "folder image".
 _Avoid_: Folder image, cover, artwork, thumbnail.
 
 **Playlist summary**:

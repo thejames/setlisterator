@@ -793,10 +793,18 @@ def test_delete_back_to_playlists(client, monkeypatch):
     assert resp.headers["Location"].endswith("/playlists")
 
 
-# --- poster upload (create + build + editor) -------------------------------
+# --- poster: upload + link (create + build + editor) ------------------------
 
-def _img(name="cover.jpg", ctype="image/jpeg", data=b"\xff\xd8\xff\x00stub"):
-    return (io.BytesIO(data), name, ctype)
+# The server identifies an image by its leading bytes, not the declared type
+# (ADR 0005), so the stub bytes have to be real magic numbers or nothing is
+# accepted. Pass `data` explicitly to send something that isn't an image.
+_MAGIC = {"image/jpeg": b"\xff\xd8\xff\x00stub",
+          "image/png": b"\x89PNG\r\n\x1a\x0astub",
+          "image/webp": b"RIFF\x10\x00\x00\x00WEBPVP8 stub"}
+
+
+def _img(name="cover.jpg", ctype="image/jpeg", data=None):
+    return (io.BytesIO(_MAGIC[ctype] if data is None else data), name, ctype)
 
 
 def test_create_forwards_poster_to_core(client, monkeypatch):
@@ -880,6 +888,152 @@ def test_editor_notice_banner_renders(client, monkeypatch):
     monkeypatch.setattr(core, "list_playlists", lambda cfg: [])
     body = client.get("/playlists", query_string={"notice": "poster"}).data.decode()
     assert "couldn’t be set" in body
+
+
+# --- poster from a link (ADR 0005) ------------------------------------------
+#
+# core.fetch_poster_link is covered offline in test_setlist_to_plex.py; here we
+# only check the routes reach it, that the file outranks it, and that a bad link
+# warns like any other image problem instead of blocking the save.
+
+def _capture_create(monkeypatch, captured, poster_ok=True):
+    monkeypatch.setattr(core, "create_playlist",
+                        lambda cfg, name, keys, meta=None, poster_path=None:
+                        captured.update(poster_path=poster_path)
+                        or core.CreateResult(name, poster_ok))
+
+
+def test_build_fetches_a_poster_link(client, monkeypatch):
+    captured = {}
+    _capture_create(monkeypatch, captured)
+    monkeypatch.setattr(core, "fetch_poster_link",
+                        lambda link: captured.update(link=link) or ("/tmp/p.png", None))
+    resp = client.post("/build", data={
+        "name": "Mix", "rating_keys": ["10"],
+        "poster_link": "  https://example.test/cover.png  ",
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    assert captured["link"] == "https://example.test/cover.png"   # stripped
+    assert captured["poster_path"] == "/tmp/p.png"
+
+
+def test_an_uploaded_file_outranks_a_link(client, monkeypatch):
+    # Both boxes filled: the file is the deliberate act, so the link is never
+    # even fetched (ADR 0005).
+    captured = {"link": None}
+    _capture_create(monkeypatch, captured)
+    monkeypatch.setattr(core, "fetch_poster_link",
+                        lambda link: captured.update(link=link) or (None, None))
+    resp = client.post("/build", data={
+        "name": "Mix", "rating_keys": ["10"], "poster": _img(),
+        "poster_link": "https://example.test/ignored.png",
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    assert captured["link"] is None                  # link never dereferenced
+    assert captured["poster_path"] is not None       # the upload was used
+
+
+def test_an_unusable_file_falls_through_to_the_link(client, monkeypatch):
+    # The file only outranks the link while it's usable. A rejected file must
+    # not take a good link down with it — otherwise you get no image at all and
+    # no clue why, since the client hides the link box once a file is picked.
+    captured = {}
+    _capture_create(monkeypatch, captured)
+    monkeypatch.setattr(core, "fetch_poster_link",
+                        lambda link: captured.update(link=link) or ("/tmp/p.png", None))
+    resp = client.post("/build", data={
+        "name": "Mix", "rating_keys": ["10"],
+        "poster": _img("notes.txt", "text/plain", b"hello"),
+        "poster_link": "https://example.test/cover.png",
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    assert captured["link"] == "https://example.test/cover.png"
+    assert captured["poster_path"] == "/tmp/p.png"
+    assert "couldn’t be set" not in resp.data.decode()   # the link saved it
+
+
+def test_an_unusable_file_alone_still_warns(client, monkeypatch):
+    # No link to fall through to -> the file's own rejection is the warning.
+    captured = {}
+    _capture_create(monkeypatch, captured)
+    monkeypatch.setattr(core, "fetch_poster_link",
+                        lambda link: pytest.fail("no link was supplied"))
+    resp = client.post("/build", data={
+        "name": "Mix", "rating_keys": ["10"],
+        "poster": _img("notes.txt", "text/plain", b"hello"),
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    assert captured["poster_path"] is None
+    assert "couldn’t be set" in resp.data.decode()
+
+
+def test_a_bad_poster_link_warns_but_still_creates(client, monkeypatch):
+    captured = {}
+    _capture_create(monkeypatch, captured)
+    monkeypatch.setattr(core, "fetch_poster_link",
+                        lambda link: (None, "couldn't be fetched"))
+    resp = client.post("/build", data={
+        "name": "Mix", "rating_keys": ["10"],
+        "poster_link": "https://nowhere.test/gone.png",
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200                   # the playlist was still made
+    assert captured["poster_path"] is None
+    assert "couldn’t be set" in resp.data.decode()
+
+
+def test_a_raising_poster_link_still_creates(client, monkeypatch):
+    # Belt and braces for ADR 0002: even if taking the poster raises — a shape
+    # core is meant to have absorbed — the route must not lose the playlist.
+    captured = {}
+    _capture_create(monkeypatch, captured)
+
+    def boom(link):
+        raise ValueError("Invalid IPv6 URL")
+
+    monkeypatch.setattr(core, "fetch_poster_link", boom)
+    resp = client.post("/build", data={
+        "name": "Mix", "rating_keys": ["10"],
+        "poster_link": "http://[",
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200                   # not a 500
+    assert captured["poster_path"] is None           # ...and it was still created
+    assert "couldn’t be set" in resp.data.decode()
+
+
+def test_blank_poster_link_is_not_a_poster(client, monkeypatch):
+    # An empty (or whitespace) box must not count as an attempt — otherwise
+    # every save without an image would warn.
+    captured = {}
+    _capture_create(monkeypatch, captured)
+    monkeypatch.setattr(core, "fetch_poster_link",
+                        lambda link: pytest.fail("blank link was dereferenced"))
+    resp = client.post("/build", data={
+        "name": "Mix", "rating_keys": ["10"], "poster_link": "   ",
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    assert captured["poster_path"] is None
+    assert "couldn’t be set" not in resp.data.decode()
+
+
+def test_editor_accepts_a_poster_link(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(core, "set_playlist",
+                        lambda cfg, key, name, keys, poster_path=None:
+                        captured.update(poster_path=poster_path)
+                        or core.SetResult(name, len(keys), True))
+    monkeypatch.setattr(core, "fetch_poster_link", lambda link: ("/tmp/p.jpg", None))
+    resp = client.post("/playlists/999/edit", data={
+        "name": "N", "rating_keys": ["1"],
+        "poster_link": "https://example.test/cover.jpg",
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 302
+    assert captured["poster_path"] == "/tmp/p.jpg"
+    assert "notice=poster" not in resp.headers["Location"]
+
+
+def test_poster_link_field_renders_on_every_write_path(client, monkeypatch):
+    monkeypatch.setattr(core, "list_playlists", lambda cfg: [])
+    assert 'name="poster_link"' in client.get("/build").data.decode()
 
 
 def test_delete_back_defaults_and_rejects_junk(client, monkeypatch):

@@ -58,33 +58,54 @@ def _inject_plex_baseurl():
                 "audition_transcode_default": core.AUDITION_TRANSCODE_DEFAULT}
 
 
-# Poster upload: an optional browser image saved to a temp file for the core
-# uploader. Best-effort (ADR 0002) — an unusable file never blocks a save; we
-# skip it and warn. Deliberately NOT capped via Flask's MAX_CONTENT_LENGTH,
-# which would 413 the whole POST and lose the form (the preview session). The
-# accept/reject policy (types, size) lives in core.check_poster.
-def _take_poster_upload(req):
-    """Pull an optional ``poster`` file from a request and stash it to a temp
-    file for core.set_playlist_poster.
+# Poster: an optional image saved to a temp file for the core uploader, from
+# either an upload or a link (ADR 0005). Best-effort (ADR 0002) — an unusable
+# image never blocks a save; we skip it and warn. Deliberately NOT capped via
+# Flask's MAX_CONTENT_LENGTH, which would 413 the whole POST and lose the form
+# (the preview session). The accept/reject policy (types, size) lives in
+# core.check_poster, and what the image *is* comes from core.sniff_image_type —
+# never from the browser's declared mimetype, which is a guess at the extension.
+def _take_poster(req):
+    """Pull an optional poster from a request, from the ``poster`` file field
+    or the ``poster_link`` URL, and stash it to a temp file.
 
     Returns ``(poster_path, prewarn)``: ``poster_path`` is a temp file the
-    caller must delete when a valid image was uploaded, else None; ``prewarn``
-    is a short reason when a file was supplied but rejected (unsupported type or
-    too large), else None. No file at all -> ``(None, None)``.
+    caller must delete when a usable image was supplied, else None; ``prewarn``
+    is a short reason when one was supplied but rejected (unsupported type, too
+    large, unreachable link), else None. Neither field -> ``(None, None)``.
+
+    A usable file beats a link when both arrive: picking a file is deliberate in
+    a way a string left in a text input isn't (see ADR 0005). An *unusable* file
+    doesn't win, though — it falls through to the link, because a supplied image
+    we can't use shouldn't take a supplied image we can with it.
+
+    Nothing raises out of here. Every caller runs this *before* its try/finally
+    — it has to, since the path it returns is what that finally cleans up — so
+    an exception escaping would bypass the route's error handling entirely and
+    500 the save. That is the one outcome ADR 0002 rules out, so the last resort
+    is a declined image with the traceback logged, never a lost playlist.
     """
-    file = req.files.get("poster")
-    if file is None or not file.filename:
+    try:
+        file = req.files.get("poster")
+        data = file.read() if file is not None and file.filename else b""
+        link = (req.form.get("poster_link") or "").strip()
+        if data:
+            ext, reason = core.check_poster(core.sniff_image_type(data),
+                                            len(data))
+            if not reason:
+                fd, path = tempfile.mkstemp(prefix="setlist_poster_", suffix=ext)
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+                return path, None
+            if not link:
+                return None, reason
+        if link:
+            # Already returns this function's exact (path, reason) contract.
+            return core.fetch_poster_link(link)
         return None, None
-    data = file.read()
-    if not data:
-        return None, None
-    ext, reason = core.check_poster(file.mimetype or "", len(data))
-    if reason:
-        return None, reason
-    fd, path = tempfile.mkstemp(prefix="setlist_poster_", suffix=ext)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(data)
-    return path, None
+    except Exception:
+        app.logger.exception("Poster could not be taken from the request")
+        return None, "couldn't be used"
 
 
 # Shared actionable clause for every "your image didn't take" message, so the
@@ -465,7 +486,7 @@ def _create_and_render(name, rating_keys, history_meta, missing):
     upload (temp file + guaranteed cleanup), create the playlist, and render the
     result page — warning if the image didn't take. Returns a Flask response.
     """
-    poster_path, prewarn = _take_poster_upload(request)
+    poster_path, prewarn = _take_poster(request)
     try:
         config = core.load_config()
         result = core.create_playlist(config, name, rating_keys, history_meta,
@@ -780,7 +801,7 @@ def playlist_save(rating_key):
         return _error("Missing name", "A playlist name is required.", 400)
     if not rating_keys:
         return _error("Nothing to save", "A playlist needs at least one track.", 400)
-    poster_path, prewarn = _take_poster_upload(request)
+    poster_path, prewarn = _take_poster(request)
     try:
         config = core.load_config()
         result = core.set_playlist(config, rating_key, name, rating_keys,

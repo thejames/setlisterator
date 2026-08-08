@@ -50,6 +50,7 @@ import logging
 import os
 import re
 import sys
+import tempfile
 import time
 from collections import namedtuple
 from datetime import datetime
@@ -1371,6 +1372,34 @@ POSTER_ACCEPT = ",".join(_POSTER_EXTENSIONS)          # image/jpeg,image/png,ima
 POSTER_MAX_LABEL = f"{POSTER_MAX_BYTES // (1024 * 1024)} MB"
 
 
+# The leading bytes are the only honest account of what a file is. A browser's
+# declared mimetype is whatever it guessed from the extension, and a web
+# server's Content-Type is whatever it was configured to say — S3 hands out
+# application/octet-stream for perfectly good JPEGs, and a 404 page can arrive
+# labelled image/jpeg. So the bytes decide, on both the upload and the link
+# path (ADR 0005). Twelve bytes is enough for every signature we accept.
+POSTER_SNIFF_BYTES = 12
+_IMAGE_MAGIC = ((b"\xff\xd8\xff", "image/jpeg"),
+                (b"\x89PNG\r\n\x1a\n", "image/png"))
+
+
+def sniff_image_type(head):
+    """Identify an image from its leading bytes.
+
+    Returns a mimetype from the allowed set, or None when the bytes aren't one
+    we can vouch for — including a truncated header, which we decline rather
+    than guess at. Feeds ``check_poster``; it does not replace it.
+    """
+    for magic, mimetype in _IMAGE_MAGIC:
+        if head[:len(magic)] == magic:
+            return mimetype
+    # WebP is a RIFF container: "RIFF" <4-byte length> "WEBP". Checking only
+    # "RIFF" would also match WAV and AVI.
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def check_poster(mimetype, size):
     """Validate an uploaded poster against the allowed types and size ceiling.
 
@@ -1384,6 +1413,65 @@ def check_poster(mimetype, size):
     if ext is None:
         return None, "unsupported type"
     return ext, None
+
+
+# A poster link is dereferenced here, by us, rather than handed to Plex — which
+# plexapi would happily do via uploadPoster(url=...). Fetching it ourselves is
+# what lets check_poster apply to a link at all, and what lets us tell the user
+# whether it worked. See ADR 0005.
+POSTER_LINK_TIMEOUT = 10          # seconds, connect and read
+_POSTER_CHUNK = 64 * 1024
+
+
+def fetch_poster_link(link):
+    """Download an image from a link and stash it to a temp file.
+
+    Returns ``(poster_path, reason)`` in the same shape the upload path uses:
+    a temp file the caller must delete and ``None`` on success, else ``None``
+    and a short reason. Streams with a hard stop at ``POSTER_MAX_BYTES`` rather
+    than trusting Content-Length, which is often absent and occasionally wrong.
+    """
+    # requests would reject file:// on its own, with an InvalidSchema our
+    # handler below catches — but a guard that matters shouldn't live in a
+    # dependency's behaviour where an upgrade could quietly move it.
+    if not link.lower().startswith(("http://", "https://")):
+        return None, "not a web link"
+    data = bytearray()
+    try:
+        with requests.get(link, stream=True, timeout=POSTER_LINK_TIMEOUT) as resp:
+            resp.raise_for_status()
+            for chunk in resp.iter_content(chunk_size=_POSTER_CHUNK):
+                data.extend(chunk)
+                # Stop the moment we're past the ceiling. check_poster would
+                # decline these bytes anyway, and reading on is how a link that
+                # never ends — hostile or just wrong — becomes our memory
+                # problem. The comparison matches check_poster's exactly, so a
+                # file sitting right on the limit still gets through.
+                if len(data) > POSTER_MAX_BYTES:
+                    return None, "too large"
+    except (requests.RequestException, ValueError) as exc:
+        # A bad link is the user's most likely mistake here, so it reads as a
+        # declined poster like any other, not a traceback. Best-effort all the
+        # way down (ADR 0002): the playlist save never hangs on this.
+        #
+        # ValueError is not belt-and-braces: urllib3 raises bare ValueErrors
+        # that requests does NOT wrap — LocationParseError for an over-long
+        # host label, "Invalid IPv6 URL" for a stray bracket. Both are typo
+        # distance from a real link, and the first even passes a browser's
+        # type="url" check, so catching only RequestException left the most
+        # likely mistake as the one that took the save down.
+        logging.warning("Poster link %s could not be fetched: %s", link, exc)
+        return None, "couldn't be fetched"
+    # Only the head is sniffed; bytes() on the whole buffer would copy up to
+    # POSTER_MAX_BYTES to read twelve of them.
+    ext, reason = check_poster(sniff_image_type(bytes(data[:POSTER_SNIFF_BYTES])),
+                               len(data))
+    if reason:
+        return None, reason
+    fd, path = tempfile.mkstemp(prefix="setlist_poster_", suffix=ext)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+    return path, None
 
 
 def set_playlist_poster(playlist, poster_path):

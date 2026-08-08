@@ -215,12 +215,15 @@ remote link, and enough to identify a song — which you can turn off under the
 **gear menu** to stream the original file instead. Formats a browser can't
 decode (ALAC, WMA) are always transcoded, so they play either way.
 
-**Playlist image** (optional): pick a JPEG/PNG/WebP (up to 10 MB) to set as the
-playlist's poster in Plex — no need to add it through the Plex UI afterward. It
-works the same on the **Build** page and when editing an existing playlist
-(there, leaving the field empty keeps the current image). The image is
-best-effort: if it can't be set, the playlist is still created/saved and you're
-told, so a bad file never costs you your work.
+**Playlist image** (optional): set the playlist's poster in Plex — no need to
+add it through the Plex UI afterward. Either **pick a file** or **paste a link**
+(the app fetches it for you); if you do both, the file wins. JPEG/PNG/WebP up to
+10 MB either way, and the *bytes* decide — a mislabelled file or a CDN error
+page dressed as an image is declined, whichever way it arrived. It works the
+same on the **Build** page and when editing an existing playlist (there, leaving
+both fields empty keeps the current image). The image is best-effort: if it
+can't be set, the playlist is still created/saved and you're told, so a bad file
+or a dead link never costs you your work.
 
 **Concerts** (under the navbar's **History ▾** menu) lists every show you've
 created, newest first. Each row can **Re-open** the setlist in Preview, link out
